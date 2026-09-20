@@ -1,0 +1,14 @@
+*.png
+
+cat << 'EOF' >> .gitignore
+
+# Model weights
+*.pth
+*.pt
+*.bin
+*.onnx
+
+# Python cache
+__pycache__/
+*.py[cod]
+EOF
