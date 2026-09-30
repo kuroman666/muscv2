@@ -1,0 +1,29 @@
+========================================
+測試時間: 2026-09-30 17:20:02
+【本次實驗超參數】
+  - Feature Layers : 2 5 8
+  - R List (聚合)  : 3 5 7
+  - Image Resize   : 224
+  - Backbone       : dino_vitbase8
+----------------------------------------
+Category: can
+Features extracting...
+Features aggregating...
+Mutual scoring in layer0...
+Mutual scoring in layer1...
+Mutual scoring in layer2...
+computing metrics...
+can
+image-level, auroc:48.94315421979357, f1:95.3125, ap:91.32179545536336
+pixel-level, auroc:74.06188776486513, f1:0.005224854747618219, ap:0.0013133002384623984, aupro:37.06767072127265
+visualization...
+can
+image-level, auroc:48.94315421979357, f1:95.3125, ap:91.32179545536336
+pixel-level, auroc:74.06188776486513, f1:0.005224854747618219, ap:0.0013133002384623984, aupro:37.06767072127265
+mean
+image-level, auroc:48.94315421979357, f1:95.3125, ap:91.32179545536336
+pixel-level, auroc:74.06188776486513, f1:0.005224854747618219, ap:0.0013133002384623984, aupro:37.06767072127265
+./output/mvtec_2/dino_vitbase8/imagesize224/
+----------------------------------------
+推論總耗時: 101 秒
+========================================

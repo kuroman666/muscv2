@@ -1,0 +1,10 @@
+========================================
+測試時間: 2026-09-30 17:31:39
+【本次實驗超參數】
+  - Feature Layers : 2 5 8
+  - R List (聚合)  : 3 5 7
+  - Image Resize   : 224
+  - Backbone       : dino_vitbase8
+----------------------------------------
+Category: can
+Features extracting...
