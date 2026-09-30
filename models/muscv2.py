@@ -90,6 +90,31 @@ class MuScV2():
                 return _CLASSNAMES_eyecandies
             test_dataset = eyecandies.EyecandiesDataset(source=self.path, split=eyecandies.DatasetSplit.TEST,
                                             classname=category, resize=self.image_size, imagesize=self.image_size)
+
+        #改
+        # --- 新增這段 MvTEC-2 讀取邏輯 ---
+        elif self.dataset == 'mvtec_2':
+            if get_categories: 
+                return ['can']
+                
+            import torchvision.transforms as transforms
+            from datasets.mvtec2 import MVTec2Dataset
+            
+            my_transforms = transforms.Compose([
+                transforms.Resize((self.image_size, self.image_size)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ])
+            
+            test_dataset = MVTec2Dataset(
+                data_path=self.path, 
+                class_name=category, 
+                is_train=False, 
+                transform=my_transforms
+            )
+        # -----------------------------------
+        
+        
         return test_dataset
 
 
