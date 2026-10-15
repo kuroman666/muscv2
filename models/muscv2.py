@@ -60,20 +60,55 @@ class MuScV2():
         self.image_size = cfg['datasets']['img_resize']
         self.features_list = [l+1 for l in cfg['models']['feature_layers']]
         self.r_list = cfg['models']['r_list']
-        self.output_dir = os.path.join(cfg['testing']['output_dir'], self.dataset, '-'.join(self.model_name), 'imagesize{}'.format(self.image_size)) + '/'
-        os.makedirs(self.output_dir, exist_ok=True)
+
+         # 1. 從設定檔取得您傳入的完整資料路徑 (例如: ./data/categorized_dataset/TMUN87/)
+         raw_path = cfg['datasets']['data_path']
+
+         # 2. 用 strip('/') 去除字串最右邊可能多出來的斜線
+         # 然後用 split('/') 把字串依照斜線切成陣列，並用 [-1] 抓取最後一個元素 (即 TMUN87)
+         dataset_id = raw_path.strip('/').split('/')[-1]
+
+         # 3. 將抓出來的名稱 dataset_id 加到路徑的最尾端
+         self.output_dir = os.path.join(cfg['testing']['output_dir'], self.dataset, '-'.join(self.model_name), 'imagesize{}'.format(self.image_size), dataset_id) + '/'
+
+         os.makedirs(self.output_dir, exist_ok=True)
 
 
+    # def load_backbone(self):
+    #     if self.modality in ['2d', '2d+3d']:
+    #         self.dino_model = _backbones.load(self.model_name[0])
+    #         self.dino_model.to(self.device)
+    #     if self.modality in ['3d', '2d+3d']:
+    #         from models.backbone.point_transformer import PointTransformer
+    #         self.point_transformer = PointTransformer(group_size=128, num_group=1024).to(self.device)
+    #         self.point_transformer.load_model_from_ckpt('./pointmae_pretrain.pth')
+
+    #改
     def load_backbone(self):
         if self.modality in ['2d', '2d+3d']:
-            self.dino_model = _backbones.load(self.model_name[0])
+            # 從作者組裝好的 vision_transformer 檔案匯入 vit_large
+            from models.backbone.dino_vision_transformer import vit_large
+            
+            # 1. 建立 DINOv2 Large 模型
+            # 注意：這份程式碼沒有支援 num_register_tokens 參數，所以要拿掉
+            self.dino_model = vit_large(patch_size=14, img_size=518)
+           
+            # 2. 讀取權重檔
+            weight = torch.load('./dinov2_vitl14_reg4_pretrain.pth', map_location='cpu')
+            
+            # 3. 將權重寫入模型 (strict=False 可以略過 registers 等不匹配的權重)
+            self.dino_model.load_state_dict(weight, strict=False)
+
+            # 4. 放到 GPU 
             self.dino_model.to(self.device)
-        if self.modality in ['3d', '2d+3d']:
+
+            if self.modality in ['3d', '2d+3d']:
             from models.backbone.point_transformer import PointTransformer
             self.point_transformer = PointTransformer(group_size=128, num_group=1024).to(self.device)
             self.point_transformer.load_model_from_ckpt('./pointmae_pretrain.pth')
-
-
+    #改
+            
+            
     def load_datasets(self, category='', get_categories=False):
         # dataloader
         if self.dataset == 'mvtec_3d':
@@ -114,7 +149,30 @@ class MuScV2():
             )
         # -----------------------------------
         
-        
+         #改
+        # --- 新增這段 MvTEC-2 讀取邏輯 ---
+        elif self.dataset == 'TMUN87':
+            if get_categories: 
+                return ['TMUN87']
+
+            import torchvision.transforms as transforms
+            from datasets.mvtec2 import MVTec2Dataset
+
+             my_transforms = transforms.Compose([
+                transforms.Resize((self.image_size, self.image_size)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ])
+
+            test_dataset = MVTec2Dataset(
+                data_path=self.path, 
+                class_name=category, 
+                is_train=False, 
+                transform=my_transforms
+            )
+        # -----------------------------------
+
+
         return test_dataset
 
 
@@ -173,7 +231,10 @@ class MuScV2():
         nonzero_indices_center_list = []
         nonzero_indices_center_neighbor_list = []
         curvatures_list = []
-        # extract features
+        #改
+        print(f"資料集總共讀到 {len(test_dataset)} 張圖片！")
+
+         # extract features
         print('Features extracting...')
         for image_info in tqdm(test_dataloader):
             image = image_info["image"]
@@ -183,10 +244,17 @@ class MuScV2():
             with torch.no_grad(), torch.cuda.amp.autocast():
                 if self.modality != '3d':
                     # 2D modal feature extraction
-                    input_image = image.to(torch.float).to(self.device)
-                    patch_tokens_all = self.dino_model.get_intermediate_layers(x=input_image, n=max(self.features_list))
+                    input_image = image.to(torch.float).to(self.device)evice)
+                  
+                    # 1. 取得特徵並強制要求回傳 cls_token
+                    patch_tokens_raw = self.dino_model.get_intermediate_layers(x=input_image, n=max(self.features_list), return_class_token=True)
+
+                    # 2. 將 cls_token 重新拼接到 patch_tokens 的最前面，還原成 [B, 257, 1024] 的形狀
+                    patch_tokens_all = [torch.cat((cls_tok.unsqueeze(1), p_tok), dim=1) for p_tok, cls_tok in patch_tokens_raw]
+                    
+                    # 3. 提取指定的特徵層
                     patch_tokens = [patch_tokens_all[l-1] for l in self.features_list]
-                    patch_tokens_list.append(patch_tokens)  # (B, L+1, C)
+                    patch_tokens_list.append(patch_tokens) # (B, L+1, C)
                 if self.modality != '2d':
                     # 3D modal feature extraction
                     organized_pc = image_info['point_cloud'].to(self.device)
@@ -200,10 +268,7 @@ class MuScV2():
                     curvatures_list.append(curvatures)  # curvature
                     pc_center_list.append(center)   # center point
                     nonzero_indices_list.append(nonzero_indices)    # foreground points
-                    nonzero_indices_center_list.append(nonzero_indices[center_idx.squeeze()].unsqueeze(0))  # foreground center points
-                    nonzero_indices_center_neighbor = nonzero_indices[ori_idx.squeeze()]    # neighborhood points of each center point
-                    nonzero_indices_center_neighbor_list.append(nonzero_indices_center_neighbor.unsqueeze(0))
-                    point_tokens_list.append(point_tokens)
+                    
 
         # Similar Neighborhood Aggregation with Multiple Degrees (SNAMD)
         print('Features aggregating...')
