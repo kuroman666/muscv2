@@ -4,14 +4,15 @@
 # 1. 在這裡集中設定你要測試的超參數
 # ==========================================
 DEVICE=0
-DATA_PATH="./data/mvtec-2"
-DATASET_NAME="mvtec_2"
-CLASS_NAME="can"
-BACKBONE_NAME="dino_vitbase8"
-FEATURE_LAYERS="3 7"
-R_LIST="3 5 7"
+DATA_PATH="./data/categorized_dataset/TMUN87"
+DATASET_NAME="mvtec_2"   # 維持 mvtec_2 才能呼叫你寫好的讀取邏輯"
+CLASS_NAME="other_status"       # 對應資料夾名稱
+# 建議先用比較淺的特徵跟小的聚合範圍來抓紋理瑕疵
+FEATURE_LAYERS="3 7 11"
+R_LIST="1 3 5"
 IMG_RESIZE=224
 OUTPUT_DIR="./output/"
+BACKBONE_NAME="dinov2_vitl14"
 
 # 確保輸出資料夾存在
 mkdir -p $OUTPUT_DIR
