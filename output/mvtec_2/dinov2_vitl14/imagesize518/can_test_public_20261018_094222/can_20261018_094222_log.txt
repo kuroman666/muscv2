@@ -1,0 +1,27 @@
+========================================
+測試時間: 2026-10-18 09:42:22 (台北時間)
+輸出目錄: ./output/mvtec_2/dinov2_vitl14/imagesize518/can_test_public_20261018_094222/
+【本次實驗超參數】
+ - Data Path : ./data/mvtec-2/can
+ - Class Name : test_public
+ - Feature Layers : 3 7 11
+ - R List (聚合) : 1 3 5
+ - Image Resize : 518
+ - Backbone : dinov2_vitl14
+ - Threshold (瑕疵門檻) : 0.55
+ - Alpha (熱力圖透明度) : 0.6
+----------------------------------------
+Category: test_public
+資料集總共讀到 162 張圖片！
+Features extracting...
+Features aggregating...
+Mutual scoring in layer0...
+Mutual scoring in layer1...
+Mutual scoring in layer2...
+已將所有圖片的異常分數排序並儲存至: ./output/mvtec_2/dinov2_vitl14/imagesize518/can_test_public_20261018_094222/test_public_defect_scores.csv
+正在產生視覺化圖片 [模式: whole_norm | Threshold=0.55 (0~1尺度) | Alpha=0.6]...
+視覺化完成！三合一圖片 (原圖 | 單獨瑕疵圖 | 匡出瑕疵的圖) 已儲存至: ./output/mvtec_2/dinov2_vitl14/imagesize518/can_test_public_20261018_094222/vis/test_public
+所有類別檢測完畢！CSV 與視覺化圖片已產出。
+----------------------------------------
+推論總耗時: 20 秒
+========================================
