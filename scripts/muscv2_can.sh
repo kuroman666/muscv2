@@ -25,14 +25,18 @@ CLASS_NAME="test_public"        # 這樣就只會讀取 test_public 裡面的圖
 
 # ====== [進公司需修改處 2：實驗超參數調整] ======
 BACKBONE_NAME="dinov2_vitl14"
-FEATURE_LAYERS="3 7 11"         # ViT-Large 共24層，後續也可測試 "5 11 17 23"
+# FEATURE_LAYERS="3 7 11"         # ViT-Large 共24層，後續也可測試 "5 11 17 23"
+FEATURE_LAYERS="5 11 17 23"   # 加入第 17, 23 深層語意特徵，抑制正常貼紙反光誤判
 R_LIST="1 3 5"                  # 包含 1 以保留微小瑕疵獨立特徵
 IMG_RESIZE=518                  # 若要對齊網格數可測 392 或 518
 OUTPUT_DIR="./output/"
 
 # 設定視覺化的 Threshold 與 Alpha (使用 export 讓 Python 直接讀取 (對應論文 normalization01 後的 0.0 ~ 1.0 熱力圖尺度) )
-export THRESHOLD=0.55
+export THRESHOLD=0.8
 export ALPHA=0.6
+
+# 新增：晶圓圓形有效區域比例 (0.0 代表關閉遮罩，適合公司外測 can；進公司測整張 Wafer 建議設為 0.92 ~ 0.95，代表只保留中心 92%~95% 半徑內的晶圓區域，濾除黑邊與邊緣反光)
+export WAFER_MASK_RATIO=0.0
 # ================================================
 
 # 確保輸出資料夾存在
@@ -66,6 +70,7 @@ echo " - Image Resize : $IMG_RESIZE" >> "$LOG_FILE"
 echo " - Backbone : $BACKBONE_NAME" >> "$LOG_FILE"
 echo " - Threshold (瑕疵門檻) : $THRESHOLD" >> "$LOG_FILE"
 echo " - Alpha (熱力圖透明度) : $ALPHA" >> "$LOG_FILE"
+echo " - Wafer Mask Ratio : $WAFER_MASK_RATIO" >> "$LOG_FILE"
 echo "----------------------------------------" >> "$LOG_FILE"
 
 # ==========================================

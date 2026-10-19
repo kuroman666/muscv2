@@ -137,9 +137,7 @@ class MuScV2():
 
 
     def visualization(self, image_path_list, gt_list, pr_px, category):
-        # =========================================================================
         # 1. 嚴格遵循 HUST-SLOW/MuSc-V2 官方論文之 normalization01 熱力圖計算方式
-        # =========================================================================
         def normalization01(img):
             return (img - img.min()) / (img.max() - img.min() + 1e-8)
 
@@ -154,12 +152,11 @@ class MuScV2():
         elif self.vis_type == 'whole_norm':
             norm_pr_px = normalization01(norm_pr_px)
 
-        # 2. 讀取 .sh 腳本設定的 THRESHOLD 與 ALPHA
-        # 注意：因為 norm_pr_px 已依論文公式正規化至 0.0 ~ 1.0 (對應熱力圖 0~255)，
-        # 建議 THRESHOLD 設在 0.5 ~ 0.65 (即論文熱力圖中呈現黃、橘、紅色的瑕疵高溫區)
+        # 2. 讀取 .sh 腳本設定的 THRESHOLD、ALPHA 與 WAFER_MASK_RATIO
         threshold = float(os.environ.get('THRESHOLD', 0.5))
         alpha = float(os.environ.get('ALPHA', 0.6))
-        print(f"正在產生視覺化圖片 [模式: {self.vis_type} | Threshold={threshold} (0~1尺度) | Alpha={alpha}]...")
+        wafer_mask_ratio = float(os.environ.get('WAFER_MASK_RATIO', 0.0))
+        print(f"正在產生視覺化圖片 [模式: {self.vis_type} | Threshold={threshold} (0~1尺度) | Alpha={alpha} | Wafer_ROI={wafer_mask_ratio}]...")
         
         save_path = os.path.join(self.output_dir, 'vis', category)
         os.makedirs(save_path, exist_ok=True)
@@ -180,16 +177,11 @@ class MuScV2():
             defect_mask = norm_map >= threshold
 
             # --- 【第 2 張：單獨瑕疵圖 (不顯示背景 Heatmap，僅單獨呈現抓出的瑕疵)】 ---
-            # 預設模式 A：全黑背景上，單獨顯示被抓出來的瑕疵區域 (原圖像素與熱力色依 alpha 混合)
             isolated_defect_img = np.zeros_like(orig_img)
             blended_defect = cv2.addWeighted(orig_img, 1 - alpha, paper_heatmap, alpha, 0)
             isolated_defect_img[defect_mask] = blended_defect[defect_mask]
 
-            # (備選模式 B：若希望「單獨瑕疵圖」保留原圖背景、只單獨在瑕疵處上色，將下面兩行取消註解即可)
-            # isolated_defect_img = orig_img.copy()
-            # isolated_defect_img[defect_mask] = blended_defect[defect_mask]
-
-            # --- 【第 3 張：匡出瑕疵的圖 (在原圖上用紅色方框 Bounding Box 匡出瑕疵)】 ---
+            # --- 【第 3 張：匡出瑕疵的圖 (紅框標示瑕疵 + 細綠圈標示晶圓有效檢測區)】 ---
             boxed_defect_img = orig_img.copy()
             mask_uint8 = np.uint8(defect_mask * 255)
             contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -199,16 +191,28 @@ class MuScV2():
                 # 在原圖上畫出紅色外框 (BGR: 0, 0, 255)，線條粗細為 2
                 cv2.rectangle(boxed_defect_img, (x, y), (x + w, y + h), (0, 0, 255), 2)
 
-            # =========================================================
+            # 若有啟用晶圓圓形遮罩 (WAFER_MASK_RATIO > 0)，畫出細綠線圓圈代表「有效晶圓檢測區」
+            if wafer_mask_ratio > 0.0:
+                center = (self.image_size // 2, self.image_size // 2)
+                radius = int(self.image_size * 0.5 * wafer_mask_ratio)
+                # 畫出細綠線圓圈 (若想改用虛線，可將下行註解，並取消註解下方的 for 迴圈)
+                cv2.circle(boxed_defect_img, center, radius, (0, 255, 0), 1, cv2.LINE_AA)
+                # for angle in range(0, 360, 6):
+                #     cv2.ellipse(boxed_defect_img, center, (radius, radius), 0, angle, angle + 3, (0, 255, 0), 1, cv2.LINE_AA)
+
             # 3. 儲存圖片：「左：原圖 | 中：單獨瑕疵圖 | 右：匡出瑕疵的圖」
-            # =========================================================
             img_name = os.path.basename(img_path)
             name_no_ext, ext = os.path.splitext(img_name)
+            
+            # 取得上一層資料夾名稱 (例如 good 或 bad)，避免同名檔案互相覆蓋！
+            parent_dir = os.path.basename(os.path.dirname(img_path))
 
             combined_img = np.hstack((orig_img, isolated_defect_img, boxed_defect_img))
-            cv2.imwrite(os.path.join(save_path, f"{name_no_ext}_comparison{ext}"), combined_img)
-          
+            cv2.imwrite(os.path.join(save_path, f"{parent_dir}_{name_no_ext}_comparison{ext}"), combined_img)
+
+        
         print(f"視覺化完成！三合一圖片 (原圖 | 單獨瑕疵圖 | 匡出瑕疵的圖) 已儲存至: {save_path}")
+
             
 
     def make_category_data(self, category):
@@ -375,13 +379,87 @@ class MuScV2():
             anomaly_salient_feat_3d = torch.cat(anomaly_salient_feat_3d, dim=0).cpu()
             anomaly_salient_feats = torch.cat([anomaly_salient_feat_2d, anomaly_salient_feat_3d], dim=1)
 
-        # 取得異常分數與像素矩陣
-        B = anomaly_maps.shape[0]
-        ac_score = np.array(anomaly_maps).reshape(B, -1).max(-1)
-        pr_sp = ac_score
-        if pr_sp.ndim == 0:
-            pr_sp = np.expand_dims(pr_sp, axis=0)
+        # # 1. 取得熱力圖像素矩陣 (確保維度為: 圖片數, 高, 寬)
+        # pr_px = np.array(anomaly_maps).squeeze()
+        # if pr_px.ndim == 2:
+        #     pr_px = np.expand_dims(pr_px, axis=0)
 
+        # # ====== [新增：整張 Wafer 專用圓形 ROI 遮罩 (濾除四角背景與晶圓邊緣反光)] ======
+        # wafer_mask_ratio = float(os.environ.get('WAFER_MASK_RATIO', 0.0))
+        # if wafer_mask_ratio > 0.0:
+        #     H_px, W_px = pr_px.shape[1], pr_px.shape[2]
+        #     center = (W_px // 2, H_px // 2)
+        #     radius = int(min(H_px, W_px) * 0.5 * wafer_mask_ratio)
+            
+        #     # 建立圓形遮罩：圓內為 1，圓外(四角背景與晶圓極邊緣)為 0
+        #     circle_mask = np.zeros((H_px, W_px), dtype=np.uint8)
+        #     cv2.circle(circle_mask, center, radius, 1, thickness=-1)
+            
+        #     # 將圓外區域的分數統一壓平為整批資料的最低背景值，避免邊框反光霸佔 Anomaly_Score
+        #     bg_min_val = pr_px.min()
+        #     pr_px[:, circle_mask == 0] = bg_min_val
+        #     print(f"已套用整張 Wafer 圓形 ROI 遮罩 (保留中心半徑比例: {wafer_mask_ratio}，有效半徑: {radius} px)")
+        # # ==============================================================================
+
+        # # 2. 依論文 Max 定義計算異常分數 (此時已排除晶圓背景干擾)
+        # B = pr_px.shape[0]
+        # pr_sp = pr_px.reshape(B, -1).max(axis=1)
+
+        # import pandas as pd
+        # df_scores = pd.DataFrame({
+        #     'Image_Path': image_path_list,
+        #     'Anomaly_Score': pr_sp
+        # })
+
+        # df_scores = df_scores.sort_values(by='Anomaly_Score', ascending=False)
+        # csv_path = os.path.join(self.output_dir, f"{category}_defect_scores.csv")
+        # df_scores.to_csv(csv_path, index=False)
+        # print(f"已將所有圖片的異常分數排序並儲存至: {csv_path}")
+
+        # # 3. 繪製三合一視覺化圖 (原圖 | 單獨瑕疵圖 | 匡出瑕疵的圖)
+        # self.visualization(image_path_list, gt_list, pr_px, category)
+
+        # return (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 0.0)
+
+                # 1. 取得熱力圖像素矩陣
+        pr_px = np.array(anomaly_maps).squeeze()
+        if pr_px.ndim == 2:
+            pr_px = np.expand_dims(pr_px, axis=0)
+
+        # 2. 補回論文標準高斯平滑 (濾除雷射貼紙與表面單點極端反光雜訊)
+        from scipy.ndimage import gaussian_filter
+        for i in range(pr_px.shape[0]):
+            pr_px[i] = gaussian_filter(pr_px[i], sigma=4)
+
+        # 3. 整張 Wafer 專用圓形 ROI 遮罩 (WAFER_MASK_RATIO > 0 時生效)
+        wafer_mask_ratio = float(os.environ.get('WAFER_MASK_RATIO', 0.0))
+        if wafer_mask_ratio > 0.0:
+            H_px, W_px = pr_px.shape[1], pr_px.shape[2]
+            center = (W_px // 2, H_px // 2)
+            radius = int(min(H_px, W_px) * 0.5 * wafer_mask_ratio)
+            circle_mask = np.zeros((H_px, W_px), dtype=np.uint8)
+            cv2.circle(circle_mask, center, radius, 1, thickness=-1)
+            pr_px[:, circle_mask == 0] = pr_px.min()
+
+        # 4. 計算原始最高分 ac_score，並執行修正對角線歸零問題後的 RsCon 二次計分
+        B = pr_px.shape[0]
+        ac_score = pr_px.reshape(B, -1).max(axis=1)
+        
+        if B > 8:
+            feats_norm = F.normalize(anomaly_salient_feats, p=2, dim=-1)
+            dist_matrix = torch.cdist(feats_norm, feats_norm, p=2).numpy()
+            np.fill_diagonal(dist_matrix, np.inf) # 排除自己跟自己比較，解決原本歸零的 Bug
+            sorted_indices = np.argsort(dist_matrix, axis=1)
+            rs_scores = np.zeros_like(ac_score)
+            for k in [1, 7]:
+                k_neighbors = sorted_indices[:, :k]
+                neighbor_scores = ac_score[k_neighbors].mean(axis=1)
+                rs_scores += (ac_score - neighbor_scores * 0.3)
+            pr_sp = rs_scores / 2.0
+        else:
+            pr_sp = ac_score
+
+        # 5. 輸出 CSV 與視覺化圖片
         import pandas as pd
         df_scores = pd.DataFrame({
             'Image_Path': image_path_list,
@@ -393,11 +471,11 @@ class MuScV2():
         df_scores.to_csv(csv_path, index=False)
         print(f"已將所有圖片的異常分數排序並儲存至: {csv_path}")
 
-        # 繪製三合一視覺化圖 (原圖 | 單獨瑕疵圖 | 匡出瑕疵的圖)
-        pr_px = np.array(anomaly_maps).squeeze()
         self.visualization(image_path_list, gt_list, pr_px, category)
 
         return (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 0.0)
+
+
 
 
     def main(self):
