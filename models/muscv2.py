@@ -246,59 +246,63 @@ class MuScV2():
         print('Features extracting...')
         for image_info in tqdm(test_dataloader):
             image = image_info["image"]
-            image_path_list.extend(image_info["image_path"])
-            img_masks.append(image_info["mask"])
+           image_path_list.extend(image_info["image_path"])
+            img_masks.append(image_info["mask"].cpu())
             gt_list.extend(list(image_info["is_anomaly"].numpy()))
             with torch.no_grad(), torch.cuda.amp.autocast():
                 if self.modality != '3d':
+                    # 2D modal feature extraction
                     input_image = image.to(torch.float).to(self.device)
-                    patch_tokens_raw = self.dino_model.get_intermediate_layers(x=input_image, n=max(self.features_list), return_class_token=True)
-                    patch_tokens_all = [torch.cat((cls_tok.unsqueeze(1), p_tok), dim=1) for p_tok, cls_tok in patch_tokens_raw]
-                    patch_tokens = [patch_tokens_all[l-1] for l in self.features_list]
-                    patch_tokens_list.append(patch_tokens)
-                if self.modality != '2d':
-                    organized_pc = image_info['point_cloud'].to(self.device)
-                    organized_pc_np = organized_pc.squeeze().permute(1, 2, 0)
-                    unorganized_pc = organized_pc_to_unorganized_pc(organized_pc=organized_pc_np)
-                    nonzero_indices = torch.nonzero(torch.all(unorganized_pc != 0, dim=1), as_tuple=False).squeeze()
-                    xyz = unorganized_pc[nonzero_indices, :].unsqueeze(dim=0).permute(0, 2, 1).contiguous()
-                    pc_list.append(xyz)
-                    point_tokens, center, ori_idx, center_idx, curvatures = self.point_transformer(xyz)
-                    curvatures_list.append(curvatures)
-                    pc_center_list.append(center)
-                    nonzero_indices_list.append(nonzero_indices)
-                    nonzero_indices_center_list.append(nonzero_indices[center_idx.squeeze()].unsqueeze(0))
-                    nonzero_indices_center_neighbor = nonzero_indices[ori_idx.squeeze()]
-                    nonzero_indices_center_neighbor_list.append(nonzero_indices_center_neighbor.unsqueeze(0))
-                    point_tokens_list.append(point_tokens)
+                    patch_tokens_all = self.dino_model.get_intermediate_layers(x=input_image, n=max(self.features_list))
+                    
+                    # 【關鍵修正】若 Backbone (如 DINOv2) 輸出不含 CLS token (長度已為完全平方數，如 37x37=1369)
+                    # 在最前面補 1 個 dummy token (變成 1370)，讓 _SNAMD.py 切掉 index 0 後剛好還原為 1369！
+                    patch_tokens = []
+                    for l in self.features_list:
+                        pt = patch_tokens_all[l-1].cpu() # (B, L, C)
+                        if int(np.sqrt(pt.shape[1])) ** 2 == pt.shape[1]:
+                            dummy_cls = torch.zeros((pt.shape[0], 1, pt.shape[2]), dtype=pt.dtype)
+                            pt = torch.cat([dummy_cls, pt], dim=1) # (B, L+1, C)
+                        patch_tokens.append(pt)
 
-        # Similar Neighborhood Aggregation with Multiple Degrees (SNAMD)
-        print('Features aggregating...')
-        SNAMD_r = SNAMD(device=self.device, r_list=self.r_list)
-        Z_2d_layers = {}
-        Z_3d_layers = {}
-        if self.modality != '3d':
-            for im in range(len(patch_tokens_list)):
-                with torch.no_grad(), torch.cuda.amp.autocast():
-                    patch_tokens = patch_tokens_list[im]
-                    features = SNAMD_r._embed_2d(patch_tokens)
-                    features /= features.norm(dim=-1, keepdim=True)
-                    for l in range(features.shape[2]):
-                        if str(l) not in Z_2d_layers.keys():
-                            Z_2d_layers[str(l)] = []
-                        Z_2d_layers[str(l)].append(features[:, :, l, :])
-        if len(point_tokens_list) != 0:
-            for im in range(len(point_tokens_list)):
-                with torch.no_grad(), torch.cuda.amp.autocast():
-                    patch_tokens = point_tokens_list[im]
-                    patch_tokens = [p/p.norm(dim=-1, keepdim=True) for p in patch_tokens]
-                    center = pc_center_list[im]
-                    curvatures = curvatures_list[im]
-                    features = SNAMD_r._embed_3d(patch_tokens, center, curvatures)
-                    for l in range(features.shape[2]):
-                        if str(l) not in Z_3d_layers.keys():
-                            Z_3d_layers[str(l)] = []
-                        Z_3d_layers[str(l)].append(features[:, :, l, :])
+                    patch_tokens_list.append(patch_tokens) # (B, L+1, C)
+                    
+                # 特徵提取完畢後，釋放 DINO backbone 佔用的 GPU 記憶體
+                if self.modality in ['2d', '2d+3d']:
+                    del self.dino_model
+                    torch.cuda.empty_cache()
+
+               # Similar Neighborhood Aggregation with Multiple Degrees (SNAMD)
+               print('Features aggregating...')
+               SNAMD_r = SNAMD(device=self.device, r_list=self.r_list)
+               Z_2d_layers = {}
+               Z_3d_layers = {}
+               if self.modality != '3d':
+                   # aggregate 2D features
+                   for im in range(len(patch_tokens_list)):
+                       with torch.no_grad(), torch.cuda.amp.autocast():
+                           # 【修正拼字】patch_tokens (有 s)、self.device (無 s)、_embed_2d (有底線)、True
+                           patch_tokens = [p.to(self.device) for p in patch_tokens_list[im]]
+                           features = SNAMD_r._embed_2d(patch_tokens) # (B, L, layer, C)
+                           features /= features.norm(dim=-1, keepdim=True)
+                           for l in range(features.shape[2]):
+                               if str(l) not in Z_2d_layers.keys():
+                                   Z_2d_layers[str(l)] = []
+                           Z_2d_layers[str(l)].append(features[:, :, l, :].cpu())
+                    del patch_tokens_list, SNAMD_r
+                    torch.cuda.empty_cache()
+                if len(point_tokens_list) != 0:
+                    for im in range(len(point_tokens_list)):
+                       with torch.no_grad(), torch.cuda.amp.autocast():
+                           patch_tokens = point_tokens_list[im]
+                           patch_tokens = [p/p.norm(dim=-1, keepdim=True) for p in patch_tokens]
+                           center = pc_center_list[im]
+                           curvatures = curvatures_list[im]
+                           features = SNAMD_r._embed_3d(patch_tokens, center, curvatures)
+                           for l in range(features.shape[2]):
+                               if str(l) not in Z_3d_layers.keys():
+                                   Z_3d_layers[str(l)] = []
+                               Z_3d_layers[str(l)].append(features[:, :, l, :])
 
         # Multimodal Mutual Scoring
         layer_keys = Z_2d_layers.keys() if self.modality != '3d' else Z_3d_layers.keys()
@@ -313,39 +317,55 @@ class MuScV2():
         anomaly_maps_2d = torch.tensor([]).float().to(self.device)
         anomaly_maps_3d = torch.tensor([]).float().to(self.device)
         for l in layer_keys:
+            # different layers
             print(f'Mutual scoring in layer{l}...')
             if self.modality != '3d':
-                Z_2d = torch.cat(Z_2d_layers[l], dim=0).to(self.device)
+                Z_2d = torch.cat(Z_2d_layers[l], dim=0).to(self.device) # (N, L, C)
             if self.modality != '2d':
-                Z_3d = torch.cat(Z_3d_layers[l], dim=0).to(self.device)
+                Z_3d = torch.cat(Z_3d_layers[l], dim=0).to(self.device) # (N, L, C)
+            if self.modality == '2d':
+                # mutual scoring for only 2D data':
+                with torch.no_grad():
+                    anomaly_maps_2d = torch.tensor([]).float().to(self.device)
+                    anomaly_maps_3d = torch.tensor([]).float().to(self.device)
+        for l in layer_keys:
+            print(f'Mutual scoring in layer{l}...')
+            if self.modality != '3d':
+                # 確保每個元素的裝置一致後再 cat，並放上 GPU
+                Z_2d = torch.cat([z.to(self.device) for z in Z_2d_layers[l]], dim=0)
+            if self.modality != '2d':
+                Z_3d = torch.cat([z.to(self.device) for z in Z_3d_layers[l]], dim=0)
             if self.modality == '2d':
                 anomaly_maps_2d_msm = MSM_single(Z=Z_2d, device=self.device)
-                anomaly_maps_2d = torch.cat((anomaly_maps_2d, anomaly_maps_2d_msm.unsqueeze(0)), dim=0)
+                # 強制將 MSM_single 回傳的結果對齊到 self.device (cuda:0)，解決 wrapper_CUDA_cat 報錯
+                anomaly_maps_2d = torch.cat((anomaly_maps_2d, anomaly_maps_2d_msm.to(self.device).unsqueeze(0)), dim=0)
             if self.modality == '3d':
                 anomaly_maps_3d_msm = MSM_single(Z=Z_3d, device=self.device)
-                anomaly_maps_3d = torch.cat((anomaly_maps_3d, anomaly_maps_3d_msm.unsqueeze(0)), dim=0)
+                anomaly_maps_3d = torch.cat((anomaly_maps_3d, anomaly_maps_3d_msm.to(self.device).unsqueeze(0)), dim=0)
             elif self.modality == '2d+3d':
                 anomaly_maps_2d_msm, anomaly_maps_3d_msm = MSM_multiple(Z_2d=Z_2d, Z_3d=Z_3d, device=self.device, patch2point_list=patch2point_list, point2patch_list=point2patch_list)
-                anomaly_maps_3d = torch.cat((anomaly_maps_3d, anomaly_maps_3d_msm.unsqueeze(0)), dim=0)
-                anomaly_maps_2d = torch.cat((anomaly_maps_2d, anomaly_maps_2d_msm.unsqueeze(0)), dim=0)
-        if self.modality != '3d':
-            anomaly_maps_2d = torch.mean(anomaly_maps_2d, 0)
-        if self.modality != '2d':
-            anomaly_maps_3d = torch.mean(anomaly_maps_3d, 0)
-
+                anomaly_maps_3d = torch.cat((anomaly_maps_3d, anomaly_maps_3d_msm.to(self.device).unsqueeze(0)), dim=0)
+                anomaly_maps_2d = torch.cat((anomaly_maps_2d, anomaly_maps_2d_msm.to(self.device).unsqueeze(0)), dim=0)
+            if self.modality != '3d':
+                anomaly_maps_2d = torch.mean(anomaly_maps_2d, 0)
+            if self.modality != '2d':
+                anomaly_maps_3d = torch.mean(anomaly_maps_3d, 0)
+                 
         # calculate anomaly-salient features
         anomaly_salient_feat_2d = []
         anomaly_salient_feat_3d = []
         if self.modality in ['2d', '2d+3d']:
             B, L = anomaly_maps_2d.shape
             layers_2d = list(Z_2d_layers.keys())
-            features_2d = torch.cat(Z_2d_layers[layers_2d[-2]], dim=0)
+            # 確保 features_2d 與索引都在同一個 device 上運算完再轉回 cpu
+            features_2d = torch.cat([z.to(self.device) for z in Z_2d_layers[layers_2d[-2]]], dim=0)
             amap_max_idx = torch.max(anomaly_maps_2d, dim=-1)[1]
-            anomaly_salient_feat_2d.append(features_2d[torch.arange(B), amap_max_idx, :].cpu())
+            batch_idx = torch.arange(B, device=self.device)
+            anomaly_salient_feat_2d.append(features_2d[batch_idx, amap_max_idx, :].cpu())
             H = int(np.sqrt(L))
             anomaly_maps_2d = F.interpolate(anomaly_maps_2d.view(B, 1, H, H),
-                                        size=self.image_size, mode='bilinear', align_corners=True).squeeze()
-        if self.modality in ['3d', '2d+3d']:
+                                            size=self.image_size, mode='bilinear', align_corners=True).squeeze()     
+         if self.modality in ['3d', '2d+3d']:
             from utils.tools import KNNGaussianBlur
             B, L = anomaly_maps_3d.shape
             layers_3d = list(Z_3d_layers.keys())
