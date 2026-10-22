@@ -316,18 +316,7 @@ class MuScV2():
             point2patch_list = None
         anomaly_maps_2d = torch.tensor([]).float().to(self.device)
         anomaly_maps_3d = torch.tensor([]).float().to(self.device)
-        for l in layer_keys:
-            # different layers
-            print(f'Mutual scoring in layer{l}...')
-            if self.modality != '3d':
-                Z_2d = torch.cat(Z_2d_layers[l], dim=0).to(self.device) # (N, L, C)
-            if self.modality != '2d':
-                Z_3d = torch.cat(Z_3d_layers[l], dim=0).to(self.device) # (N, L, C)
-            if self.modality == '2d':
-                # mutual scoring for only 2D data':
-                with torch.no_grad():
-                    anomaly_maps_2d = torch.tensor([]).float().to(self.device)
-                    anomaly_maps_3d = torch.tensor([]).float().to(self.device)
+       
         for l in layer_keys:
             print(f'Mutual scoring in layer{l}...')
             if self.modality != '3d':
