@@ -28,11 +28,14 @@ def preprocess_wafer_image(img_bgr, ref_template=None):
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
 
-    # --- 【步驟 1：自動抓取晶圓圓心、統一半徑為 0.45*S 並輸出至 SxS 正方形畫布】 ---
+        # --- 【步驟 1：自動抓取晶圓圓心、統一半徑為 0.45*S 並輸出至 SxS 正方形畫布】 ---
     if align_on:
-        corner_mean = np.mean([blurred[0, 0], blurred[0, -1], blurred[-1, 0], blurred[-1, -1]])
+        # [強化防呆] 先將 blurred 線性拉伸至 0~255 再做 Otsu，確保極暗或極亮的色差 Wafer 也能 100% 抓準外圓！
+        blurred_stretch = cv2.normalize(blurred, None, 0, 255, cv2.NORM_MINMAX)
+        corner_mean = np.mean([blurred_stretch[0, 0], blurred_stretch[0, -1], blurred_stretch[-1, 0], blurred_stretch[-1, -1]])
         thresh_type = cv2.THRESH_BINARY_INV if corner_mean > 127 else cv2.THRESH_BINARY
-        _, thresh = cv2.threshold(blurred, 0, 255, thresh_type + cv2.THRESH_OTSU)
+        _, thresh = cv2.threshold(blurred_stretch, 0, 255, thresh_type + cv2.THRESH_OTSU)
+
 
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if contours:
@@ -98,8 +101,12 @@ def preprocess_wafer_image(img_bgr, ref_template=None):
 
     # --- 【步驟 3：離散 90 度方向配準 (解決晶圓轉向 90/180/270 度)】 ---
     if ref_template is not None and rot90_on:
+        # 使用半徑 0.45*S 的遮罩 (包含晶圓邊緣 Notch 缺口與非對稱邊緣步進區)，提升 90 度轉向辨識率
+        rot_mask = np.zeros((S, S), dtype=np.uint8)
+        cv2.circle(rot_mask, (S // 2, S // 2), int(S * 0.45), 1, thickness=-1)
         small_gray = cv2.resize(gray, (128, 128), interpolation=cv2.INTER_AREA).astype(np.float32)
-        small_mask = cv2.resize(roi_mask, (128, 128), interpolation=cv2.INTER_NEAREST) > 0
+        small_mask = cv2.resize(rot_mask, (128, 128), interpolation=cv2.INTER_NEAREST) > 0
+
 
         best_k = 0
         best_corr = -1e9
