@@ -6,63 +6,50 @@
 DEVICE=0
 
 # ====== [進公司需修改處 1：切換資料路徑與類別名稱] ======
-# # 【公司外 MVTec-2 測試設定】
-# DATA_PATH="./data/mvtec-2"
-# DATASET_NAME="mvtec_2"          # 固定維持 mvtec_2，以呼叫 datasets/mvtec2.py
-# CLASS_NAME="can"                # 對應 ./data/mvtec-2/ 下的 can 資料夾
-
-# 將原本的 CLASS_NAME="can" 改為指定底下的測試子資料夾 (例如只測 test_public 或 test_private_mixed)
+# 【公司外 MVTec-2 測試設定】
 DATA_PATH="./data/mvtec-2/can"
 DATASET_NAME="mvtec_2"
-CLASS_NAME="test_public"        # 這樣就只會讀取 test_public 裡面的圖片，不會把 train 也混進來！
-
+# CLASS_NAME="test_public"
 
 # 【進公司晶圓測試設定】(進公司時將上面三行註解，取消下面三行註解)
 # DATA_PATH="./data/categorized_dataset/TMUN87"
 # DATASET_NAME="mvtec_2"        # 固定維持 mvtec_2 不用改！
 # CLASS_NAME="other_status"     # 對應 TMUN87 下的圖片資料夾名稱
-# ========================================================
 
 # ====== [進公司需修改處 2：實驗超參數調整] ======
 BACKBONE_NAME="dinov2_vitl14"
-# FEATURE_LAYERS="3 7 11"         # ViT-Large 共24層，後續也可測試 "5 11 17 23"
-# FEATURE_LAYERS="5 11 17 23"   # 加入第 17, 23 深層語意特徵，抑制正常貼紙反光誤判
-# R_LIST="1 3 5"                  # 包含 1 以保留微小瑕疵獨立特徵
-
-# 修改前：
-# FEATURE_LAYERS="5 11 17 23"
-# R_LIST="1 3 5"
-
-# 修改後（捨棄第 5 層與 r=1，降低對高頻細線與像素偏移的敏感度）：
-FEATURE_LAYERS="11 17 23"
-R_LIST="3 5"
-
-IMG_RESIZE=518                  # 若要對齊網格數可測 392 或 518
+FEATURE_LAYERS="5 11 17 23"     # 維持原論文/標準四層設定，或依需求測 "11 17 23"
+R_LIST="1 3 5"                  # 維持原論文標準 R_LIST="1 3 5"
+# FEATURE_LAYERS="11 17 23"       # 進公司測 Wafer 建議用 "11 17 23" 避開細格線；測 can 可用 "5 11 17 23"
+# R_LIST="3 5"                    # 進公司測 Wafer 建議用 "3 5"；測 can 可用 "1 3 5"
+IMG_RESIZE=518
 OUTPUT_DIR="./output/"
 
-# 設定視覺化的 Threshold 與 Alpha (使用 export 讓 Python 直接讀取 (對應論文 normalization01 後的 0.0 ~ 1.0 熱力圖尺度) )
+# 視覺化門檻與透明度
 export THRESHOLD=0.8
 export ALPHA=0.6
 
-# 新增：晶圓圓形有效區域比例 (0.0 代表關閉遮罩，適合公司外測 can；進公司測整張 Wafer 建議設為 0.92 ~ 0.95，代表只保留中心 92%~95% 半徑內的晶圓區域，濾除黑邊與邊緣反光)
-export WAFER_MASK_RATIO=0.95
-# ================================================
+# ====== [進公司需修改處 3：晶圓專用前處理開關] ======
+# ====== [晶圓專用資料前處理開關 (在 mvtec2.py 執行，不影響模型內部架構)] ======
+# 【A. 公司外測 can 時，請用這組 (全關 = 原版 MuSc-V2)】：
+export AUTO_ALIGN_WAFER=0
+export PHOTOMETRIC_NORM=0
+export FIX_90DEG_ROTATION=0
+export WAFER_MASK_RATIO=0.0
 
-# 確保輸出資料夾存在
+# 【B. 進公司測整張 Wafer 時，請將上面四行註解，改取消註解下面四行】：
+# export AUTO_ALIGN_WAFER=1     # 自動抓晶圓圓心置中、轉成正方形畫布、直徑統一為 90%
+# export PHOTOMETRIC_NORM=1     # 晶圓內部光度正規化 (消除灰階色度差異，且不在綠圈內製造黑邊斷崖)
+# export FIX_90DEG_ROTATION=1   # 自動與第一張晶圓對齊 0/90/180/270 度方向
+# export WAFER_MASK_RATIO=0.84  # 晶圓直徑固定為 90%，此處設 0.84 確保綠圈 100% 落在晶圓內部安全區
+
 mkdir -p "$OUTPUT_DIR"
 
-# ==========================================
-# 2. 建立【資料集名稱_台北時間】資料夾與紀錄檔
-# ==========================================
 DATASET_ID=$(basename "$DATA_PATH")
-
-# 強制取得台北時間 (UTC+8)
 TIMESTAMP=$(date -u -d '+8 hours' '+%Y%m%d_%H%M%S')
 READABLE_TIME=$(date -u -d '+8 hours' '+%Y-%m-%d %H:%M:%S')
 
-# 組合出完整的專屬輸出資料夾路徑，並 export 讓 Python 直接共用同一個路徑
 export EXP_OUTPUT_DIR="${OUTPUT_DIR}${DATASET_NAME}/${BACKBONE_NAME}/imagesize${IMG_RESIZE}/${DATASET_ID}_${CLASS_NAME}_${TIMESTAMP}/"
-
 mkdir -p "$EXP_OUTPUT_DIR"
 
 LOG_FILE="${EXP_OUTPUT_DIR}${DATASET_ID}_${TIMESTAMP}_log.txt"
@@ -80,28 +67,23 @@ echo " - Backbone : $BACKBONE_NAME" >> "$LOG_FILE"
 echo " - Threshold (瑕疵門檻) : $THRESHOLD" >> "$LOG_FILE"
 echo " - Alpha (熱力圖透明度) : $ALPHA" >> "$LOG_FILE"
 echo " - Wafer Mask Ratio : $WAFER_MASK_RATIO" >> "$LOG_FILE"
+echo " - Auto Align / PhotoNorm / 90Deg : $AUTO_ALIGN_WAFER / $PHOTOMETRIC_NORM / $FIX_90DEG_ROTATION" >> "$LOG_FILE"
 echo "----------------------------------------" >> "$LOG_FILE"
 
-# ==========================================
-# 3. 開始計時並執行模型
-# ==========================================
 START_TIME=$SECONDS
 
 CUDA_VISIBLE_DEVICES=${DEVICE} python -u examples/muscv2_main.py \
---device 0 \
---data_path "$DATA_PATH" \
---dataset_name "$DATASET_NAME" \
---class_name "$CLASS_NAME" \
---backbone_name "$BACKBONE_NAME" \
---feature_layers $FEATURE_LAYERS \
---img_resize "$IMG_RESIZE" \
---r_list $R_LIST \
---output_dir "$OUTPUT_DIR" \
---vis True --save_excel True --vis_type whole_norm | tee -a "$LOG_FILE"
+  --device 0 \
+  --data_path "$DATA_PATH" \
+  --dataset_name "$DATASET_NAME" \
+  --class_name "$CLASS_NAME" \
+  --backbone_name "$BACKBONE_NAME" \
+  --feature_layers $FEATURE_LAYERS \
+  --img_resize "$IMG_RESIZE" \
+  --r_list $R_LIST \
+  --output_dir "$OUTPUT_DIR" \
+  --vis True --save_excel True --vis_type whole_norm | tee -a "$LOG_FILE"
 
-# ==========================================
-# 4. 結算推論時間
-# ==========================================
 ELAPSED_TIME=$(($SECONDS - $START_TIME))
 echo "----------------------------------------" >> "$LOG_FILE"
 echo "推論總耗時: ${ELAPSED_TIME} 秒" | tee -a "$LOG_FILE"
