@@ -26,8 +26,17 @@ CLASS_NAME="test_public"        # 這樣就只會讀取 test_public 裡面的圖
 # ====== [進公司需修改處 2：實驗超參數調整] ======
 BACKBONE_NAME="dinov2_vitl14"
 # FEATURE_LAYERS="3 7 11"         # ViT-Large 共24層，後續也可測試 "5 11 17 23"
-FEATURE_LAYERS="5 11 17 23"   # 加入第 17, 23 深層語意特徵，抑制正常貼紙反光誤判
-R_LIST="1 3 5"                  # 包含 1 以保留微小瑕疵獨立特徵
+# FEATURE_LAYERS="5 11 17 23"   # 加入第 17, 23 深層語意特徵，抑制正常貼紙反光誤判
+# R_LIST="1 3 5"                  # 包含 1 以保留微小瑕疵獨立特徵
+
+# 修改前：
+# FEATURE_LAYERS="5 11 17 23"
+# R_LIST="1 3 5"
+
+# 修改後（捨棄第 5 層與 r=1，降低對高頻細線與像素偏移的敏感度）：
+FEATURE_LAYERS="11 17 23"
+R_LIST="3 5"
+
 IMG_RESIZE=518                  # 若要對齊網格數可測 392 或 518
 OUTPUT_DIR="./output/"
 
@@ -36,7 +45,7 @@ export THRESHOLD=0.8
 export ALPHA=0.6
 
 # 新增：晶圓圓形有效區域比例 (0.0 代表關閉遮罩，適合公司外測 can；進公司測整張 Wafer 建議設為 0.92 ~ 0.95，代表只保留中心 92%~95% 半徑內的晶圓區域，濾除黑邊與邊緣反光)
-export WAFER_MASK_RATIO=0.0
+export WAFER_MASK_RATIO=0.95
 # ================================================
 
 # 確保輸出資料夾存在
@@ -78,7 +87,7 @@ echo "----------------------------------------" >> "$LOG_FILE"
 # ==========================================
 START_TIME=$SECONDS
 
-CUDA_VISIBLE_DEVICES=${DEVICE} python examples/muscv2_main.py \
+CUDA_VISIBLE_DEVICES=${DEVICE} python -u examples/muscv2_main.py \
 --device 0 \
 --data_path "$DATA_PATH" \
 --dataset_name "$DATASET_NAME" \
