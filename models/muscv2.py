@@ -435,44 +435,59 @@ class MuScV2():
         if pr_px.ndim == 2:
             pr_px = np.expand_dims(pr_px, axis=0)
 
-        # 2. 補回論文標準高斯平滑 (濾除雷射貼紙與表面單點極端反光雜訊)
-        from scipy.ndimage import gaussian_filter
-        for i in range(pr_px.shape[0]):
-            pr_px[i] = gaussian_filter(pr_px[i], sigma=4)
+        H_px, W_px = pr_px.shape[1], pr_px.shape[2]
 
-        # 3. 整張 Wafer 專用圓形 ROI 遮罩 (WAFER_MASK_RATIO > 0 時生效)
+        # [修正 A] 先建立整張 Wafer 圓形 ROI 遮罩，避免邊緣高分在高斯模糊時往內暈染
         wafer_mask_ratio = float(os.environ.get('WAFER_MASK_RATIO', 0.0))
+        circle_mask = np.ones((H_px, W_px), dtype=np.uint8)
         if wafer_mask_ratio > 0.0:
-            H_px, W_px = pr_px.shape[1], pr_px.shape[2]
             center = (W_px // 2, H_px // 2)
             radius = int(min(H_px, W_px) * 0.5 * wafer_mask_ratio)
-            circle_mask = np.zeros((H_px, W_px), dtype=np.uint8)
+            circle_mask.fill(0)
             cv2.circle(circle_mask, center, radius, 1, thickness=-1)
             pr_px[:, circle_mask == 0] = pr_px.min()
 
-        # 4. 計算原始最高分 ac_score，並執行修正對角線歸零問題後的 RsCon 二次計分
-        B = pr_px.shape[0]
-        ac_score = pr_px.reshape(B, -1).max(axis=1)
-        
-        if B > 8:
-            feats_norm = F.normalize(anomaly_salient_feats, p=2, dim=-1)
-            dist_matrix = torch.cdist(feats_norm, feats_norm, p=2).numpy()
-            np.fill_diagonal(dist_matrix, np.inf) # 排除自己跟自己比較，解決原本歸零的 Bug
-            sorted_indices = np.argsort(dist_matrix, axis=1)
-            rs_scores = np.zeros_like(ac_score)
-            for k in [1, 7]:
-                k_neighbors = sorted_indices[:, :k]
-                neighbor_scores = ac_score[k_neighbors].mean(axis=1)
-                rs_scores += (ac_score - neighbor_scores * 0.3)
-            pr_sp = rs_scores / 2.0
-        else:
-            pr_sp = ac_score
+        # [新增 B] OpenCV 自動偵測水平/垂直 Die 框線 (切割道) 並壓平分數
+        suppress_die_lines = os.environ.get('SUPPRESS_DIE_LINES', '1') == '1'
+        if suppress_die_lines:
+            # 定義抓取水平線與垂直線的長條 Kernel (長度可依 Die 大小微調，預設 25)
+            horiz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1))
+            vert_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 25))
+            dilate_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+
+            for i, img_path in enumerate(image_path_list):
+                gray = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+                gray = cv2.resize(gray, (W_px, H_px))
+                # 透過自適應二值化凸顯高對比邊緣
+                edges = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+                                              cv2.THRESH_BINARY_INV, 15, 5)
+                # 僅保留連續的水平與垂直結構線 (過濾掉不規則形狀的真瑕疵)
+                h_lines = cv2.morphologyEx(edges, cv2.MORPH_OPEN, horiz_kernel)
+                v_lines = cv2.morphologyEx(edges, cv2.MORPH_OPEN, vert_kernel)
+                grid_mask = cv2.bitwise_or(h_lines, v_lines)
+                grid_mask = cv2.dilate(grid_mask, dilate_kernel, iterations=1)
+
+                # 將 Die 框線位置的分數壓低為該圖圓內的中位數背景值
+                valid_median = np.median(pr_px[i, circle_mask == 1])
+                pr_px[i, grid_mask > 0] = np.minimum(pr_px[i, grid_mask > 0], valid_median)
+
+        # [新增 C] 扣除「批次空間中位數基底 (Batch Spatial Median)」，消除固定位置的結構反光
+        if pr_px.shape[0] > 4:
+            spatial_baseline = np.median(pr_px, axis=0, keepdims=True)
+            pr_px = np.clip(pr_px - spatial_baseline, a_min=0.0, a_max=None)
+
+        # [修正 D] 最後才執行高斯平滑，並再次確保圓外為最低值
+        from scipy.ndimage import gaussian_filter
+        for i in range(pr_px.shape[0]):
+            pr_px[i] = gaussian_filter(pr_px[i], sigma=4)
+        if wafer_mask_ratio > 0.0:
+            pr_px[:, circle_mask == 0] = pr_px.min()
 
         # 5. 輸出 CSV 與視覺化圖片
         import pandas as pd
         df_scores = pd.DataFrame({
             'Image_Path': image_path_list,
-            'Anomaly_Score': pr_sp
+            'Anomaly_Score': pr_px
         })
 
         df_scores = df_scores.sort_values(by='Anomaly_Score', ascending=False)
