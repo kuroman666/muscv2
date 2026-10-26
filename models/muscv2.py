@@ -133,6 +133,7 @@ class MuScV2():
         if pr_px.ndim == 2:
             pr_px = np.expand_dims(pr_px, axis=0)
 
+        # norm_pr_px 僅用來產生 0~255 的鮮豔熱力圖色彩 (COLORMAP_JET)
         norm_pr_px = pr_px.copy()
         if self.vis_type == 'single_norm':
             for i in range(norm_pr_px.shape[0]):
@@ -140,28 +141,48 @@ class MuScV2():
         elif self.vis_type == 'whole_norm':
             norm_pr_px = normalization01(norm_pr_px)
 
-        threshold = float(os.environ.get('THRESHOLD', 0.5))
+        # 讀取單一門檻 THRESHOLD (直接對應 CSV 的 Anomaly_Score 尺度！)
+        threshold = float(os.environ.get('THRESHOLD', 0.35))
         alpha = float(os.environ.get('ALPHA', 0.6))
         wafer_mask_ratio = float(os.environ.get('WAFER_MASK_RATIO', 0.0))
-        print(f"正在產生視覺化圖片 [模式: {self.vis_type} | Threshold={threshold} (0~1尺度) | Alpha={alpha} | Wafer_ROI={wafer_mask_ratio}]...", flush=True)
+
+        # 統計有多少張圖片的最高分超過此 THRESHOLD (即會被畫上紅框的圖片數)
+        img_max_scores = pr_px.reshape(pr_px.shape[0], -1).max(axis=1)
+        flagged_count = int((img_max_scores >= threshold).sum())
+        print(f"正在產生視覺化圖片 [單一門檻 Threshold={threshold} (直接對應 CSV Anomaly_Score) | 標註異常圖數: {flagged_count}/{len(image_path_list)} 張]...", flush=True)
+        if flagged_count == 0:
+            print(f"[提醒] 目前設定的 THRESHOLD={threshold} 高於本批資料最高分 ({img_max_scores.max():.4f})，不會畫出任何紅框！請參考上方統計建議值調降。", flush=True)
 
         save_path = os.path.join(self.output_dir, 'vis', category)
         os.makedirs(save_path, exist_ok=True)
 
         for i, img_path in enumerate(image_path_list):
-            # --- 【第 1 張：原圖 (同步套用與 Dataset 相同的對齊與光度校正，確保紅框位置 100% 準確)】 ---
+            # --- 【第 1 張：原圖】 ---
             raw_bgr = cv2.imread(img_path)
             if self.dataset in ['mvtec_2', 'TMUN87']:
                 raw_bgr = preprocess_wafer_image(raw_bgr, ref_template=MVTec2Dataset.ref_template)
             orig_img = cv2.resize(raw_bgr, (self.image_size, self.image_size))
 
+            # 取得上色用的 [0, 1] 矩陣 norm_map，以及與 CSV Anomaly_Score 同尺度的分數矩陣 raw_map
             norm_map = norm_pr_px[i]
+            raw_map = pr_px[i]
             if norm_map.shape[0] != self.image_size:
                 norm_map = cv2.resize(norm_map, (self.image_size, self.image_size))
+                raw_map = cv2.resize(raw_map, (self.image_size, self.image_size))
 
             norm_map_uint8 = np.uint8(norm_map * 255)
             paper_heatmap = cv2.applyColorMap(norm_map_uint8, cv2.COLORMAP_JET)
-            defect_mask = norm_map >= threshold
+
+            # [關鍵修改] 直接使用與 CSV Anomaly_Score 同尺度的 raw_map 判斷是否超過門檻！
+            # [升級版] 連通域遲滯門檻 (Hysteresis Thresholding)：
+            # 僅當連通區塊的最高分 >= threshold 時，才完整保留該瑕疵延伸至 0.90*threshold 的山腰輪廓，防止長條刮痕斷成碎框！
+            defect_mask = np.zeros_like(raw_map, dtype=bool)
+            if raw_map.max() >= threshold:
+                num_labels, labels = cv2.connectedComponents(np.uint8(raw_map >= threshold * 0.90))
+                for lbl in range(1, num_labels):
+                    if raw_map[labels == lbl].max() >= threshold:
+                        defect_mask[labels == lbl] = True
+
 
             # --- 【第 2 張：單獨瑕疵圖】 ---
             isolated_defect_img = np.zeros_like(orig_img)
@@ -184,8 +205,6 @@ class MuScV2():
 
             img_name = os.path.basename(img_path)
             name_no_ext, ext = os.path.splitext(img_name)
-            
-            # [修正] 取得相對於 data_path 的完整子目錄路徑 (例如 validation_good 或 test_public_bad)，徹底防止同名檔案互相覆蓋！
             rel_dir = os.path.relpath(os.path.dirname(img_path), self.path)
             safe_prefix = rel_dir.replace(os.sep, '_').strip('.')
 
@@ -193,6 +212,7 @@ class MuScV2():
             cv2.imwrite(os.path.join(save_path, f"{safe_prefix}_{name_no_ext}_comparison{ext}"), combined_img)
 
         print(f"視覺化完成！三合一圖片已儲存至: {save_path}", flush=True)
+
 
     def make_category_data(self, category):
         print(f'Category: {category}', flush=True)
@@ -431,6 +451,22 @@ class MuScV2():
         else:
             pr_sp = ac_score
 
+        # [關鍵同步] 將 RsCon 的計分比例同步映射回像素熱力圖 pr_px，使每張圖的最大像素值 100% 等於 CSV 的 Anomaly_Score (pr_sp)
+        scale_factor = (pr_sp / (ac_score + 1e-8)).reshape(B, 1, 1)
+        pr_px = pr_px * scale_factor
+
+        # 印出無 Ground Truth 時的統計分布與建議門檻，方便直接參考設定 THRESHOLD
+        s_mean, s_std = np.mean(pr_sp), np.std(pr_sp)
+        p95, p90 = np.percentile(pr_sp, 95), np.percentile(pr_sp, 90)
+        print("----------------------------------------", flush=True)
+        print(f"【Anomaly_Score 統計分佈與無監督門檻建議】", flush=True)
+        print(f" - 分數範圍 (Min ~ Max) : {pr_sp.min():.4f} ~ {pr_sp.max():.4f} (平均 Mean={s_mean:.4f}, 標準差 Std={s_std:.4f})", flush=True)
+        print(f" - 建議門檻 1 [統計離群 Mean + 1.5*Std] : {s_mean + 1.5*s_std:.4f}", flush=True)
+        print(f" - 建議門檻 2 [嚴格離群 Mean + 2.0*Std] : {s_mean + 2.0*s_std:.4f}", flush=True)
+        print(f" - 建議門檻 3 [預估前  5% 異常 (P95)]   : {p95:.4f}", flush=True)
+        print(f" - 建議門檻 4 [預估前 10% 異常 (P90)]   : {p90:.4f}", flush=True)
+        print("----------------------------------------", flush=True)
+
         # 7. 輸出 CSV 與視覺化圖片
         import pandas as pd
         df_scores = pd.DataFrame({
@@ -447,6 +483,7 @@ class MuScV2():
             self.visualization(image_path_list, gt_list, pr_px, category)
 
         return (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 0.0)
+
 
     def main(self):
         for category in self.categories:

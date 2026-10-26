@@ -25,9 +25,11 @@ R_LIST="1 3 5"                  # 維持原論文標準 R_LIST="1 3 5"
 IMG_RESIZE=518
 OUTPUT_DIR="./output/"
 
-# 視覺化門檻與透明度
-export THRESHOLD=0.8
+# 視覺化門檻 (現在已 100% 同步對齊 CSV 的 Anomaly_Score！)
+# 例如設為 0.37，代表 CSV 中 Anomaly_Score >= 0.37 的圖片與像素才會被紅框標示出來
+export THRESHOLD=0.37
 export ALPHA=0.6
+
 
 # ====== [進公司需修改處 3：晶圓專用前處理開關] ======
 # ====== [晶圓專用資料前處理開關 (在 mvtec2.py 執行，不影響模型內部架構)] ======
