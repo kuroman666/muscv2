@@ -1,243 +1,237 @@
-# ✨MuSc-V2 (TPAMI 2026)✨
+# MuSc-V2 — Zero-Shot & Training-Free 高解析度無 GT 晶圓瑕疵抓漏系統
 
-**This is an official PyTorch implementation for "MuSc-V2: Zero-Shot Multimodal Industrial Anomaly Classification and Segmentation with Mutual Scoring of Unlabeled Samples"**
+本專案基於 **MuSc-V2 (TPAMI 2026)** 打造全自動、**完全免訓練（Training-Free）** 且 **零標註樣本（Zero-Shot / Zero-GT）** 的工業視覺與晶圓瑕疵異常偵測管線。
 
-Authors:  [Xurui Li](https://github.com/xrli-U)<sup>1</sup> | [Feng Xue](https://xuefeng-cvr.github.io/)<sup>2</sup> | [Yu Zhou](https://github.com/zhouyu-hust)<sup>1</sup>
+與需要挑選 Golden Support Set 並微調訓練的模型不同，**MuSc-V2 直接透過盲池內影像彼此之間的跨圖塊互評機制（Mutual Scoring Mechanism, MSM）與全域鄰域重評（RsCon）** 找出隔離的異常瑕疵，天生具備 **0 訓練時間、0 過擬合風險** 的優勢，同時整合了：
 
-Institutions: <sup>1</sup>Huazhong University of Science and Technology | <sup>2</sup>University of Trento
+* **智慧解析度防呆切塊（Resolution-Aware Tiling）**：自動偵測圖片解析度；廠內大圖（如 `2048×2048`、`4096×4096`、`5000×5000`）自動切為 `512×512`（重疊 `64px` / 12.5%）並排除同母圖互評；廠外中低解析度公開集（`< 1536px`）自動維持整張原圖推論，避免切碎物件語意。
+* **RAM 即時縫合與碎片自動銷毀**：子圖塊 `.npy` 於記憶體（RAM）內以 2D 餘弦平滑遮罩無縫拼接回原圖解析度後，立即自動銷毀碎片暫存檔，磁碟 0 殘留。
+* **四合一防誤報純化濾波**：矩形邊界 Padding 抑制、晶圓圓周倒角（Bevel / Notch）自動偵測與餘弦衰減、灰階形態學微塵開運算濾波、峰值自適應紅框收斂。
+* **背景系統資源自動監控**：執行 `.sh` 時自動每秒記錄 Host RAM 與 GPU VRAM 使用量，結束時自動統計峰值並安全回收監控程序。
 
-### 🧐 Paper: [IEEE](https://ieeexplore.ieee.org/abstract/document/11498451) | [Arxiv](https://arxiv.org/abs/2511.10047)
+---
 
+## 一、環境與離線權重準備
 
-## <a href='#all_catelogue'>**Go to Catalogue**</a>
+1. **啟動 Conda 環境**：
+   ```bash
+   conda activate muscv2
+   ```
+2. **離線預訓練權重放置位置（公司無外網環境必看）**：
+   腳本具備離線權重自動搜尋機制（`--ckpt auto`），會依序掃描以下路徑中的 `.pth` / `.pt` / `.bin` 權重檔（優先匹配 `dinov2_vitl14` → `dinov3` → `dinov2`）：
+   * `./dinov2_vitl14_pretrain.pth`（直接放在專案根目錄最方便）
+   * `./hub_cache/` 或 `./checkpoints/`
+   * `~/.cache/torch/hub/checkpoints/`
 
+---
 
+## 二、Input 資料夾結構與放置位置
 
-## 📣News:
-**[*04/27/2026*]**
-- 📤The complete and reproducible code for MuSc-V2 is released.
+### 1. 公司廠內無 GT 實機測試（`run_inside_muscv2.sh`）
+將待測的無標註晶圓圖片放入任意資料夾（支援 `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tif`, `.tiff`，含 **16-bit TIFF** 與巢狀子資料夾，程式會遞迴自動掃描）：
 
-**[*04/24/2026*]**
-- 🎉🎉🎉Great News! Our MuSc-V2 has been accepted to **TPAMI 2026** !
-
-**[*11/14/2025*]**
-- 😋Our MuSc-V2​ paper is available on [Arxiv](https://arxiv.org/abs/2511.10047).
-- 🦾This is an extended version of the original conference paper "MuSc: Zero-Shot Industrial Anomaly Classification and Segmentation with Mutual Scoring of the Unlabeled Images", which was published at ICLR 2024.
-- The code for the original MuSc​ could be found in the separate repository: [https://github.com/xrli-U/MuSc](https://github.com/xrli-U/MuSc).
-
-<span id='all_catelogue'/>
-
-## 📖Catalogue
-
-* <a href='#abstract'>1. Abstract</a>
-* <a href='#setup'>2. Environment setup</a>
-* <a href='#datasets'>3. Datasets download</a>
-  * <a href='#datatets_mvtec3d'>MVTec 3D-AD</a>
-  * <a href='#datatets_eyecandies'>Eyecandies</a>
-* <a href='#run_musc'>4. Run MuSc-V2</a>
-* <a href='#results_datasets'>5. Detailed results</a>
-* <a href='#citation'>6. Citation</a>
-* <a href='#license'>7. License</a>
-
-<span id='abstract'/>
-
-## 👇Abstract: <a href='#all_catelogue'>[Back to Catalogue]</a>
-
-Zero-shot anomaly classification (AC) and segmentation (AS) methods aim to identify and outline defects without using any labeled samples. In this paper, we reveal a key property that is overlooked by existing methods: normal image patches across industrial products typically find many other similar patches, not only in 2D appearance but also in 3D shapes, while anomalies remain diverse and isolated.
-
-To explicitly leverage this discriminative property, we propose a Mutual Scoring framework (**MuSc-V2**) for zero-shot AC/AS, which flexibly supports single 2D/3D or multimodality. Specifically, our method begins by improving 3D representation through Iterative Point Grouping (IPG), which reduces false positives from discontinuous surfaces. Then we use Similarity Neighborhood Aggregation with Multi-Degrees (SNAMD) to fuse 2D/3D neighborhood cues into more discriminative multi-scale patch features for mutual scoring. The core comprises a Mutual Scoring Mechanism (MSM) that lets samples within each modality to assign score to each other, and Cross-modal Anomaly Enhancement (CAE) that fuses 2D and 3D scores to recover modality-specific missing anomalies. Finally, Re-scoring with Constrained Neighborhood (RsCon) suppresses false classification based on similarity to more representative samples.
-
-Our framework flexibly works on both the full dataset and smaller subsets with consistently robust performance, ensuring seamless adaptability across diverse product lines. In aid of the novel framework, MuSc-V2 achieves significant performance improvements: a **+23.7%** AP gain on the MVTec 3D-AD dataset and a **+19.3%** boost on the Eyecandies dataset, surpassing previous zero-shot benchmarks and even outperforming most few-shot methods.
-
-
-![pipline](./assets/pipeline.png) 
-
-<span id='setup'/>
-
-## 🎯Setup: <a href='#all_catelogue'>[Back to Catalogue]</a>
-
-### Environment:
-
-- Python 3.8
-- CUDA 11.7
-- PyTorch 2.0.1
-
-Clone the repository locally:
-
-```
-git clone https://github.com/HUST-SLOW/MuSc-V2.git
+```text
+muscv2/
+└── datasets/                         # 廠內測試資料集預設根目錄
+    └── fab_wafer_pool/               # [Input] 待測無 GT 晶圓盲池（可自訂資料夾名稱與多層子目錄）
+        ├── wafer_001.tif
+        ├── wafer_002.tif
+        ├── lot_A/
+        │   └── wafer_003.png
+        └── ...
 ```
 
-Create virtual environment:
+### 2. 廠外公開資料集模擬無 GT 測試（`run_outside_muscv2.sh`）
+將 MVTec AD 或 MVTec AD 2 資料集放入 `./data/` 下（腳本會自動從 `test/` 抽取正常圖 `clean_*` 與少量隱藏瑕疵 `escape_*` 組成模擬盲池）：
 
-```
-conda create --name muscv2 python=3.8
-conda activate muscv2
-```
-
-Install the required packages:
-
-```
-pip install torch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2
-pip install -r requirements.txt
-pip install "git+git://github.com/erikwijmans/Pointnet2_PyTorch.git#egg=pointnet2_ops&subdirectory=pointnet2_ops_lib"
-```
-
-<span id='datasets'/>
-
-## 👇Datasets Download: <a href='#all_catelogue'>[Back to Catalogue]</a>
-
-Put all the datasets in `./data` folder.
-
-<span id='datatets_mvtec3d'/>
-
-### [MVTec 3D-AD](https://www.mvtec.com/research-teaching/datasets/mvtec-3d-ad)
-
-```
-data
-|---mvtec_3d
-|-----|-- bagel
-|-----|-----|----- calibration
-|-----|-----|----- test
-|-----|-----|----- train
-|-----|-----|----- validation
-|-----|-- cable_gland
-|-----|--- ...
+```text
+muscv2/
+└── data/                             # 廠外公開資料集根目錄
+    ├── mvtec/                        # MVTec AD
+    │   ├── bottle/
+    │   │   └── test/
+    │   │       ├── good/
+    │   │       └── broken_large/ ...
+    │   └── capsule/ ...
+    └── mvtec-2/                      # MVTec AD 2
+        └── can/
+            └── test/
+                ├── good/
+                └── ...
 ```
 
-<span id='datatets_eyecandies'/>
+---
 
-### [Eyecandies](https://eyecan-ai.github.io/eyecandies/download)
+## 三、執行指令教學（前景 `bash` 與背景 `nohup`）
 
-```
-data
-|----eyecandies
-|-----|-- CandyCane
-|-----|-----|--- test_private
-|-----|-----|--- test_public
-|-----|-----|--- train
-|-----|-----|--- val
-|-----|-- ChocolateCookie
-|-----|--- ...
+首次使用請先賦予執行權限：
+
+```bash
+chmod +x run_inside_muscv2.sh run_outside_muscv2.sh
 ```
 
-These dataset should be preprocessed as follow,
+### 情境 A：公司廠內無 GT 實機盲池（`run_inside_muscv2.sh`）
 
+#### 1. 前景直接執行（`bash`）
+* **模式 1：動態智慧門檻（推薦初次測試使用）**
+  自動估算盲池正常核心分佈（`Hybrid` 模式，預設限制異常率 ≤ 5%），並於報表列出 `mean + 1/2/3*std` 門檻參考值：
+  ```bash
+  bash run_inside_muscv2.sh ./datasets/fab_wafer_pool
+  ```
+* **模式 2：指定固定門檻（`fixed` 模式）**
+  當已從第一次報表確認好合適門檻（例如 `0.32`），可直接在指令最後加上數字，腳本會自動切換為 `fixed` 模式並抓出所有分數 ≥ `0.32` 的晶圓：
+  ```bash
+  bash run_inside_muscv2.sh ./datasets/fab_wafer_pool 0.32
+  ```
+* **模式 3：一次批次跑多個盲池資料夾**
+  ```bash
+  bash run_inside_muscv2.sh ./datasets/lot_01 ./datasets/lot_02 0.30
+  ```
+
+#### 2. 背景掛機執行（`nohup`，適合大批量晶圓、關閉 SSH 不中斷）
+```bash
+nohup bash run_inside_muscv2.sh ./datasets/fab_wafer_pool > run_inside.nohup.log 2>&1 &
 ```
-python ./datasets/mvtec3d_preprocessing.py
-python ./datasets/eyecandies_preprocessing.py
-```
+* **即時查看執行進度**：
+  ```bash
+  tail -f run_inside.nohup.log
+  ```
+* **即時偷看系統 RAM 與 GPU VRAM 消耗**：
+  ```bash
+  tail -f wafer_escape_results/latest_mem_monitor_inside.log
+  ```
+* **確認背景任務是否仍在執行 / 手動中止**：
+  ```bash
+  ps aux | grep 1_infer_muscv2_no_gt.py
+  # 若需中止：kill <PID>
+  ```
 
-<span id='run_musc'/>
+---
 
-## 💎Run MuSc-V2: <a href='#all_catelogue'>[Back to Catalogue]</a>
+### 情境 B：廠外公開資料集模擬測試（`run_outside_muscv2.sh`）
 
-We provide two ways to run our code.
+* **執行腳本內預設的公開資料集類別**：
+  ```bash
+  bash run_outside_muscv2.sh
+  ```
+* **指定特定公開資料集類別執行**：
+  ```bash
+  bash run_outside_muscv2.sh ./data/mvtec/bottle ./data/mvtec-2/can
+  ```
+* **背景 `nohup` 執行並即時查看進度與資源監控**：
+  ```bash
+  nohup bash run_outside_muscv2.sh > run_outside.nohup.log 2>&1 &
+  tail -f run_outside.nohup.log
+  # 另開終端機監控記憶體：
+  tail -f output/latest_mem_monitor.log
+  ```
 
-### python
+---
 
-```
-python examples/muscv2_main.py
-```
-Follow the configuration in `./configs/muscv2.yaml`.
+## 四、Output 資料夾結構與輸出檔案說明
 
-### script
+### 1. 廠內實機測試輸出結構（`./wafer_escape_results/`）
 
-```
-bash scripts/muscv2.sh
-```
-The configuration in the script `muscv2.sh` takes precedence.
-
-The key arguments of the script are as follows:
-
-- `--device`: GPU_id.
-- `--data_path`: The directory of datasets.
-- `--dataset_name`: Dataset name.
-- `--class_name`: Category to be tested. If the parameter is set to `ALL`, all the categories are tested.
-- `--backbone_name`: This parameter defines the modality of data used for feature extraction. (1)*'dino_vitbase8'*: Using only 2D modal data. (2)*'point-mae'*: Using only 3D modal data. (3)*'dino_vitbase8' 'point-mae'*: Using both 2D and 3D multimodal data​. More details see `./scripts/muscv2.sh`.
-
-- `--feature_layers`: The layers for extracting features in backbone.
-- `--img_resize`: The size of the image inputted into the model.
-- `--r_list`: The aggregation degrees of our SNAMD module.
-- `--output_dir`: The directory that saves the anomaly prediction maps and metrics. This directory will be automatically created.
-- `--vis`: Whether to save the anomaly prediction maps.
-- `--vis_type`: Choose between *single_norm* and *whole_norm*. This means whether to normalize a single anomaly map or all of them together when visualizing.
-- `--save_excel`: Whether to save anomaly classification and segmentation results (metrics).
-
-
-<span id='results_datasets'/>
-
-## 🎖️Detailed results: <a href='#all_catelogue'>[Back to Catalogue]</a>
-
-All the results are implemented by the default settings in our paper.
-
-### MVTec 3D-AD
-
-|  Category  | AUROC-cls | F1-max-cls | AP-cls | AUROC-segm | F1-max-segm | AP-segm | PRO-segm |
-| :--------: | :-------: | :--------: | :----: | :--------: | :---------: | :-----: | :------: |
-|   Bagel    |   96.13   |    96.17   |  98.96 |   99.68    |    65.98    |  71.05  |  98.75   |
-| Cable_gland|   73.89   |    89.23   |  93.28 |   97.28    |    38.03    |  32.03  |  91.94   |
-|   Carrot   |   97.11   |    96.99   |  99.37 |   99.84    |    59.98    |  58.02  |  99.37   |
-|   Cookie   |   83.77   |    90.75   |  95.44 |   97.51    |    60.28    |  64.53  |  94.54   |
-|   Dowel    |   79.40   |    90.00   |  94.57 |   97.56    |    37.05    |  31.33  |  92.17   |
-|   Foam     |   85.44   |    91.76   |  95.85 |   99.28    |    49.35    |  48.19  |  96.91   |
-|   Peach    |   93.47   |    93.95   |  98.34 |   99.76    |    61.39    |  65.79  |  99.05   |
-|   Potato   |   86.02   |    92.93   |  96.30 |   99.89    |    59.94    |  63.60  |  99.53   |
-|   Rope     |   97.60   |    96.30   |  99.09 |   99.79    |    64.92    |  66.04  |  98.81   |
-|   Tire     |   87.95   |    91.53   |  96.49 |   99.68    |    48.88    |  46.39  |  98.73   |
-| **Average**|   88.08   |    92.96   |  96.77 |   99.03    |    54.58    |  54.70  |  96.98   |
-
-### Eyecandies
-
-|           Category           | AUROC-cls | F1-max-cls | AP-cls | AUROC-segm | F1-max-segm | AP-segm | PRO-segm |
-| :--------------------------: | :-------: | :--------: | :----: | :--------: | :---------: | :-----: | :------: |
-|         CandyCane         |   46.56   |    66.67   |  50.63 |   97.26    |     3.56    |   1.78  |  90.74   |
-|     ChocolateCookie      |   90.40   |    84.44   |  92.47 |   98.35    |    48.93    |  42.55  |  91.79   |
-|    ChocolatePraline     |   92.64   |    90.20   |  94.17 |   96.11    |    56.97    |  54.79  |  86.67   |
-|         Confetto         |   99.68   |    97.96   |  99.70 |   99.76    |    60.87    |  65.76  |  99.20   |
-|        GummyBear         |   87.66   |    80.85   |  89.59 |   95.77    |    39.48    |  32.93  |  87.65   |
-|      HazelnutTruffle     |   71.52   |    68.85   |  79.01 |   94.44    |    42.63    |  32.89  |  73.27   |
-|    LicoriceSandwich     |   87.20   |    82.35   |  90.14 |   97.29    |    40.75    |  35.22  |  88.93   |
-|         Lollipop         |   67.83   |    64.00   |  68.11 |   98.39    |    28.28    |  23.19  |  91.75   |
-|       Marshmallow        |   96.64   |    95.83   |  97.97 |   99.21    |    69.58    |  72.91  |  95.12   |
-|     PeppermintCandy      |   99.20   |    97.96   |  99.33 |   98.83    |    55.47    |  55.50  |  95.98   |
-|           **Average**           |   83.93   |    82.91   |  86.11 |   97.54    |    44.65    |  41.75  |  90.11   |
-
-### Download Links
-We also provide download links to anomaly maps (greyscale map) output by our MuSc-V2 below.
-
-Datasets | MVTec 3D-AD | MVTec 3D-AD | MVTec 3D-AD | Eyecandies | Eyecandies | Eyecandies |
-| :---:     |   :---:    |  :---: |  :---:  |  :---:  |  :---:  |  :---:  |
-Modalities | Only 2D | Only 3D | 2D+3D | Only 2D | Only 3D | 2D+3D |
-Google | [drive](https://drive.google.com/file/d/1Q-Dz7UrGC8N5hZaeWNJyZX4ZYbU0B8Cb/view?usp=sharing) | [drive](https://drive.google.com/file/d/1B-omDD0Qkb0IQNOGhBhUDlkkH5T3ZaWj/view?usp=sharing) | [drive](https://drive.google.com/file/d/1ZDRpDzPybS2HzEeKSxVAt-UUzS6nQLD1/view?usp=sharing) | [drive](https://drive.google.com/file/d/11SodZsEGHmDRMFfhBR5P4OfgT3CxIuWd/view?usp=sharing) | [drive](https://drive.google.com/file/d/1dMw8eCAbuIQEh5OBFMNA0C0TVl3bHwAe/view?usp=sharing) | [drive](https://drive.google.com/file/d/1YCpCoA7tvS0ItA_6i2VvEXrXQ41IHXY4/view?usp=sharing) |
-Baidu | [drive](https://pan.baidu.com/s/1gEa46-QR8F0g2EUPNDXsxA?pwd=0721) | [drive](https://pan.baidu.com/s/18byLputb2X34KxvmoVflag?pwd=0721) | [drive](https://pan.baidu.com/s/1uRa1LCK_Uxq9icgCCfB0-w?pwd=0721) | [drive](https://pan.baidu.com/s/1gm2fcilYvih3ItnHjgNT4A?pwd=0721) | [drive](https://pan.baidu.com/s/1-04xPHJXWcpMjpftrN2FEw?pwd=0721) | [drive](https://pan.baidu.com/s/1qxQ01ZdVGGo1y7Fh8NULPw?pwd=0721) |
-
-<span id='citation'/>
-
-## Citation: <a href='#all_catelogue'>[Back to Catalogue]</a>
-### MuSc-V2:
-```
-@ARTICLE{Li2026MuScV2,
-  author={Li, Xurui and Xue, Feng and Zhou, Yu},
-  journal={IEEE Transactions on Pattern Analysis and Machine Intelligence}, 
-  title={MuSc-V2: Zero-Shot Multimodal Industrial Anomaly Classification and Segmentation with Mutual Scoring of Unlabeled Samples}, 
-  year={2026},
-  pages={1-14},
-  doi={10.1109/TPAMI.2026.3688174}}
-```
-### MuSc:
-```
-@inproceedings{Li2024MuSc,
-  title={MuSc: Zero-Shot Industrial Anomaly Classification and Segmentation with Mutual Scoring of the Unlabeled Images},
-  author={Li, Xurui and Huang, Ziming and Xue, Feng and Zhou, Yu},
-  booktitle={International Conference on Learning Representations},
-  year={2024}
-}
+```text
+wafer_escape_results/
+├── latest_inside_muscv2_summary.txt              # [總表] 最新多盲池統計總結 (TXT)
+├── latest_inside_muscv2_summary.csv              # [總表] 最新多盲池統計總結 (CSV)
+├── latest_mem_monitor_inside.log                 # [監控] 最新每秒 RAM / GPU VRAM 消耗紀錄
+└── inside_no_gt_muscv2_<盲池資料夾名稱>/
+    ├── latest_log.txt                            # 該盲池最新完整終端機日誌
+    └── <YYYYMMDD_HHMMSS>/                        # 每次執行的獨立時間戳記目錄（不互相覆蓋）
+        ├── log.txt                               # 本次執行完整日誌與耗時統計
+        ├── tile_manifest.json                    # 切塊座標映射紀錄
+        ├── escape_ranking_report.txt             # [核心報表] 全盲池由高至低異常分數排名 (含 mean+1/2/3*std)
+        ├── escape_ranking_report.csv             # [核心報表] CSV 格式完整分數明細 (含 Raw 與 Filtered 分數)
+        ├── amap_npy/                             # [熱力圖矩陣] 僅儲存判定為異常的整張 Wafer .npy（碎片已自動銷毀）
+        │   └── Rank001_Score0.4120_wafer_005.npy
+        ├── anomaly_images/                       # [異常視覺化] 僅輸出超過門檻的異常晶圓（正常圖自動略過）
+        │   ├── Rank001_Score0.4120_Box02_wafer_005.png   # 三合一對照圖 (原圖 | 熱力疊圖 | 紅框定位)
+        │   └── full_res_bbox_only/
+        │       └── Rank001_Score0.4120_Box02_wafer_005.png # 1:1 原生解析度純紅框標註圖
+        └── split_eval_3packs/                    # [Step 2 拆分評估] 自動拆分為 3 包獨立 Eval 報表
+            ├── all_3_evals_comparison.txt        # 3 包拆分結果並列對照總表
+            ├── all_3_evals_comparison.csv
+            ├── eval_pack_1/ ...
+            ├── eval_pack_2/ ...
+            └── eval_pack_3/ ...
 ```
 
+### 2. 廠外公開資料集輸出結構（`./output/`）
+結構與上方完全一致，根目錄位於 `./output/`：
+* **彙整總表**：`./output/latest_multi_dataset_summary_muscv2.txt` 與 `.csv`（含 **Recall 召回率**、**FPR 誤報率**、**正常圖分數分佈**）。
+* **記憶體監控**：`./output/latest_mem_monitor.log`。
+* **個別資料集結果**：`./output/2_fab_no_gt_<資料集>_<類別>_muscv2/<YYYYMMDD_HHMMSS>/`。
 
-<span id='license'/>
+---
 
-## License: <a href='#all_catelogue'>[Back to Catalogue]</a>
-MuSc-V2 is released under the **MIT Licence**, and is fully open for academic research and also allow free commercial usage. To apply for a commercial license, please contact yuzhou@hust.edu.cn.
-# muscv2
+## 五、常用超參數調整指南
+
+在 `run_inside_muscv2.sh` 或 `run_outside_muscv2.sh` 頂部的 `[可自由修改的參數區]` 可依廠內機台特性微調：
+
+| 參數名稱 | 預設值 | 說明與調整建議 |
+| :--- | :--- | :--- |
+| `THRESH_MODE` | `"hybrid"` | 門檻模式：`hybrid`（智慧動態）、`fixed`（固定門檻）、`mean_std`（均值 + k 倍標準差）、`percentile`（分位數）、`top_k`（只抓前 K 名）。 |
+| `THRESHOLD` | `0` / `0.25` | `fixed` 模式下的判定門檻；或 `hybrid` 模式下的最低門檻下限。 |
+| `MIN_TILING_RES` | `1536` | 大圖防呆門檻：圖片長邊 ≥ `1536px` 才啟動切塊，低於此解析度自動整張推論。 |
+| `TILE_SIZE` / `TILE_OVERLAP` | `512` / `64` | 切塊解析度與重疊寬度（`64 / 512 = 12.5%` cover）。 |
+| `WAFER_EDGE_MODE` | `"auto"` | 晶圓圓周倒角（Bevel）邊緣抑制：`auto`（自動偵測圓形晶圓）、`on`（強制開啟）、`off`（關閉）。 |
+| `WAFER_EDGE_MARGIN` | `0.04` | 圓周外圈邊緣衰減寬度佔半徑比例（預設外圈 `4%` 半徑平滑抑制，減少邊緣倒角誤報）。 |
+| `SPECKLE_FILTER_RATIO` | `0.008` | 形態學開運算濾除單一 Patch 微塵雜訊的比例（若要抓極微小顆粒，可調降至 `0.003` 或 `0`）。 |
+| `MAX_PEER_TILES` | `400` | 大盲池互評時，每個 Query Tile 最多抽樣比較的他片晶圓切塊數（兼顧速度與準確度）。 |
+
+---
+
+## 六、公司廠內實機執行突發狀況排解（FAQ）
+
+### Q1：執行時無預警中斷，終端機只顯示 `Killed`（Linux OOM Killer）怎麼辦？
+* **原因**：公司盲池圖片數量過多（例如一次丟入 500 張 `5000×5000` 大圖，切出數萬張切塊），導致系統主記憶體（Host RAM）耗盡。
+* **解決方法**：
+  1. 確認使用最新版 `1_infer_muscv2_no_gt.py`（已採用**單層預分配串流互評**，不再將所有層特徵同時堆疊在 RAM）。
+  2. 若單批圖片仍超過數百張大圖，建議在 `run_inside_muscv2.sh` 中將 `TILE_SIZE=1024`、`TILE_OVERLAP=128`（維持 `12.5%` 重疊，但每張圖切塊數減少為原來的 1/4），或分批（每批 100~200 張晶圓）執行。
+
+### Q2：出現 `torch.OutOfMemoryError: CUDA out of memory`（GPU 顯存不足）怎麼辦？
+* **解決方法**：
+  1. 調降 `run_inside_muscv2.sh` 中的 `INFER_BATCH_SIZE`（從 `16` 改為 `8` 或 `4`）。
+  2. 調降 `MAX_PEER_TILES`（從 `400` 改為 `200` 或 `250`）。
+  3. 檢查是否有其他同事或殘留進程佔用 GPU：執行 `nvidia-smi` 查看，並透過 `CUDA_VISIBLE_DEVICES=1 bash run_inside_muscv2.sh ...` 切換至空閒顯卡。
+
+### Q3：公司內網無法連上網際網路，報錯 `URLError` 或找不到權重檔怎麼辦？
+* **原因**：程式找不到本地離線的 DINOv2 / DINOv3 權重，嘗試連網下載時被廠區防火牆阻擋。
+* **解決方法**：
+  1. 確認已將 `dinov2_vitl14_pretrain.pth`（或 `dinov3` 權重檔）複製到 `MuSc-V2/` 專案根目錄下。
+  2. 或在 `run_inside_muscv2.sh` 直接指定絕對路徑：
+     ```bash
+     DINO_CKPT_PATH="/home/你的帳號/project/muscv2/dinov2_vitl14_pretrain.pth"
+     ```
+
+### Q4：機台拍出來的 `.tif` / `.tiff` 是 16-bit 灰階圖，讀進來全黑或對比度異常？
+* **說明**：本專案內建 `_robust_normalize_to_uint8()`，會自動針對 `I;16` / 單通道灰階 / 浮點數 TIFF 採用 **P0.1 ~ P99.9 穩健百分位數拉伸** 轉為 8-bit RGB，防止極端飽和亮點壓扁整體對比。若遇到特殊格式導致 `PIL` 無法開啟，程式會自動切換 `OpenCV IMREAD_UNCHANGED` 備援讀取。
+
+### Q5：推論結果正常晶圓誤報（False Positive）偏多，尤其是晶圓最外圈邊緣（Bevel）被框起來？
+* **解決方法**：
+  1. 檢查 `escape_ranking_report.txt` 標頭中的 `Wafer Edge Mode` 是否為 `auto` 或 `on`。若自動偵測未觸發，請在 `run_inside_muscv2.sh` 強制設為：
+     ```bash
+     WAFER_EDGE_MODE="on"
+     WAFER_EDGE_MARGIN=0.05   # 將外圈抑制範圍從 4% 提高至 5%
+     ```
+  2. 參考報表輸出的 `mean+3*std` 數值，改用固定門檻重新篩選：
+     ```bash
+     bash run_inside_muscv2.sh ./datasets/fab_wafer_pool <報表建議的mean+3*std數值>
+     ```
+
+### Q6：有真實微小的刮傷或 Particle 漏抓（False Negative）怎麼辦？
+* **解決方法**：
+  1. 將微塵開運算濾波調小或關閉（避免把真實微缺陷當成噪點濾掉）：
+     ```bash
+     SPECKLE_FILTER_RATIO=0.003   # 或設為 0
+     MIN_AREA_RATIO=0.00005
+     ```
+  2. 關閉濾波對照原生分數：加上 `RAW_SCORE_MODE="--raw_score_mode"`，查看 `escape_ranking_report.csv` 內的 `Raw_Max_Score` 確認原始模型是否有偵測到該缺陷。
+
+### Q7：替換了盲池資料夾內的圖片，但腳本卻顯示 `[⚡ 測試池清單快取命中]` 沿用舊資料？
+* **說明**：程式會根據所有圖片的「相對路徑 + 檔案大小」計算 MD5 指紋；若檔案名稱與大小完全相同但內容已替換，請在 `run_inside_muscv2.sh` 設定 `FORCE_INFER="--force_infer"` 執行一次即可強制重切並刷新快取（跑完記得改回 `FORCE_INFER=""`）。
+
+### Q8：為什麼輸出資料夾裡沒有看到 `anomaly_images/` 裡有任何圖片，或某些正常圖沒輸出？
+* **說明**：這是**正常的防呆省空間設計**。為了避免廠內數千張正常晶圓塞爆硬碟，只有分數 ≥ `Effective Threshold` 且通過微塵面積過濾的**異常晶圓**才會輸出紅框圖與 `.npy`；所有圖片（含正常圖）的完整分數與排名皆記錄在 `escape_ranking_report.csv` 與 `escape_ranking_report.txt` 中。若想強制檢視分數最高的前 K 張圖片，可設定 `THRESH_MODE="top_k"` 並設 `TOP_K=10`。
