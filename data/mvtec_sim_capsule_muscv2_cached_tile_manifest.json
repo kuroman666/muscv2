@@ -1,0 +1,601 @@
+{
+  "pool_signature": "720241d6559a4cc59bee9d43ba37d018",
+  "tile_config_key": "mtr1536_t512_ov64_bg1.5_dt0",
+  "tile_size": 512,
+  "tile_overlap": 64,
+  "min_tiling_res": 1536,
+  "large_img_count": 0,
+  "images": {
+    "clean_000.png": {
+      "stem": "clean_000",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_000.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_000__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_000.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_000.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_001.png": {
+      "stem": "clean_001",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_001.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_001__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_001.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_001.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_002.png": {
+      "stem": "clean_002",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_002.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_002__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_002.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_002.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_003.png": {
+      "stem": "clean_003",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_003.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_003__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_003.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_003.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_004.png": {
+      "stem": "clean_004",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_004.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_004__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_004.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_004.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_005.png": {
+      "stem": "clean_005",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_005.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_005__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_005.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_005.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_006.png": {
+      "stem": "clean_006",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_006.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_006__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_006.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_006.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_007.png": {
+      "stem": "clean_007",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_007.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_007__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_007.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_007.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_008.png": {
+      "stem": "clean_008",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_008.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_008__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_008.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_008.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_009.png": {
+      "stem": "clean_009",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_009.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_009__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_009.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_009.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_010.png": {
+      "stem": "clean_010",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_010.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_010__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_010.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_010.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_011.png": {
+      "stem": "clean_011",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_011.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_011__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_011.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_011.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_012.png": {
+      "stem": "clean_012",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_012.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_012__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_012.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_012.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_013.png": {
+      "stem": "clean_013",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_013.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_013__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_013.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_013.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_014.png": {
+      "stem": "clean_014",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_014.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_014__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_014.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_014.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_015.png": {
+      "stem": "clean_015",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_015.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_015__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_015.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_015.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_016.png": {
+      "stem": "clean_016",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_016.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_016__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_016.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_016.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_017.png": {
+      "stem": "clean_017",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_017.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_017__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_017.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_017.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_018.png": {
+      "stem": "clean_018",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_018.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_018__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_018.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_018.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_019.png": {
+      "stem": "clean_019",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_019.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_019__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_019.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_019.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_020.png": {
+      "stem": "clean_020",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_020.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_020__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_020.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_020.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_021.png": {
+      "stem": "clean_021",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_021.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_021__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_021.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_021.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "clean_022.png": {
+      "stem": "clean_022",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_022.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "clean_022__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "clean_022.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/clean_022.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "escape_crack_000.png": {
+      "stem": "escape_crack_000",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/escape_crack_000.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "escape_crack_000__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "escape_crack_000.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/escape_crack_000.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "escape_crack_001.png": {
+      "stem": "escape_crack_001",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/escape_crack_001.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "escape_crack_001__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "escape_crack_001.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/escape_crack_001.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "escape_crack_002.png": {
+      "stem": "escape_crack_002",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/escape_crack_002.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "escape_crack_002__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "escape_crack_002.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/escape_crack_002.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "escape_crack_003.png": {
+      "stem": "escape_crack_003",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/escape_crack_003.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "escape_crack_003__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "escape_crack_003.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/escape_crack_003.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "escape_crack_004.png": {
+      "stem": "escape_crack_004",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/escape_crack_004.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "escape_crack_004__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "escape_crack_004.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/escape_crack_004.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "escape_crack_005.png": {
+      "stem": "escape_crack_005",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/escape_crack_005.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "escape_crack_005__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "escape_crack_005.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/escape_crack_005.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "escape_crack_006.png": {
+      "stem": "escape_crack_006",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/escape_crack_006.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "escape_crack_006__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "escape_crack_006.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/escape_crack_006.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    },
+    "escape_crack_007.png": {
+      "stem": "escape_crack_007",
+      "path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/escape_crack_007.png",
+      "height": 1000,
+      "width": 1000,
+      "tiling_applied": false,
+      "tiles": [
+        {
+          "tile_stem": "escape_crack_007__full_y0000_x0000_h1000_w1000",
+          "tile_fname": "escape_crack_007.png",
+          "tile_abs_path": "/home/kenny/project/muscv2/data/sim_fab_mvtec_capsule_pool/escape_crack_007.png",
+          "is_full_image": true,
+          "y": 0,
+          "x": 0,
+          "h": 1000,
+          "w": 1000
+        }
+      ]
+    }
+  },
+  "total_tiles": 31,
+  "num_images": 31
+}

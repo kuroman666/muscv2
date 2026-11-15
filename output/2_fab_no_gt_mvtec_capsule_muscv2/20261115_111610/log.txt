@@ -1,0 +1,47 @@
+
+===========================================================================
+[MuSc-V2 Zero-Shot 無GT抓漏純推論啟動時間] 2026-11-15 11:16:10 (UTC+8)
+[本次專屬時間戳記輸出目錄] /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_capsule_muscv2/20261115_111610
+===========================================================================
+[Tiling-Test] 已遞迴將 31 張原圖準備為 279 張推論圖塊 (自動跳過 0 張純背景角落塊) -> /home/kenny/project/muscv2/data/mvtec_sim_capsule_muscv2_tiled_pool
+[MuSc-V2 Backbone] 已自動找到本機離線權重 (DINOV2_VITL14): /home/kenny/project/muscv2/dinov2_vitl14_pretrain.pth
+[MuSc-V2 Backbone 規格偵測] Embed=1024 | Patch=14x14 | Blocks=24 | Registers=False
+[MuSc-V2 Backbone] 已透過 timm (vit_large_patch14_dinov2.lvd142m) 離線載入本地權重 (missing=0, unexpected=1)
+
+[Step 2 — MuSc-V2 Zero-Shot 互評推理] Device=cuda | Tiles=279 | Layers=[5, 11, 17, 23] | r_list=[1, 3, 5] | Mutual_Ratio=0.30 | RsCon=0.15
+
+[Step 3.1] 啟動 RAM 即時縫合與碎片銷毀模式 (共 31 張原圖) | 計分模式: FILTERED_ROBUST (防誤報純化濾波 + Top-0.015% 抗噪點峰值)
+[🧹 碎片清理完成] 所有子圖塊已於 RAM 內拼回整張影像，已自動銷毀全部碎片 Tile .npy -> /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_capsule_muscv2/20261115_111610/_tmp_tile_amap_npy
+[Step 3.2] 異常判定門檻設定: Hybrid 智慧動態門檻 = 0.3842 [P95=0.2910, 穩健統計上界(med+3.5σ)=0.3842, MinFloor=0.2700]
+           (模型範式=MuSc-V2 Training-Free Zero-Shot | 計分模式=防誤報純化濾波, 圓周邊緣抑制=auto, 邊界縮減=4.0%, 微塵開運算比例=0.0080)
+[Step 3.3] 篩選與畫框完成：共 1 張超過有效門檻 (0.3842) 已畫框輸出；其餘 30 張正常圖已自動略過不輸出。
+
+===========================================================================
+ [✅ MuSc-V2 推論完成 — 整體時間與所有檔案儲存位置總覽]
+---------------------------------------------------------------------------
+  [1] 整體推論階段總時間 (Total Inference Time) : 00:01:10.93 (70.93 秒)
+      ├─ Step 1 測試池高解析度切塊 (279 塊)      : 00:00:26.07 (26.07 秒)
+      ├─ Step 2 MuSc-V2 Zero-Shot 互評推理       : 00:00:43.44 (43.44 秒)
+      ├─ Step 3 RAM 縫合銷毀碎片與防誤報濾波畫框 : 00:00:01.42 (1.42 秒)
+      └─ 平均每張原圖推論耗時 (31 張原圖)         : 2.29 秒/張
+---------------------------------------------------------------------------
+  [2] 任務全程總執行時間 (Total Wall Time)      : 00:01:10.93 (70.93 秒)
+---------------------------------------------------------------------------
+  [3] 門檻篩選統計與分數分佈 (Score=FILTERED, Mode=hybrid, Eff_Thresh=0.3842):
+      🚨 超過門檻判定異常並畫框輸出 : 1 張
+      ✅ 未達門檻或微塵濾除直接略過 : 30 張 (不輸出圖片)
+      📊 正常圖分數分佈 (防誤報濾波後) : Max=0.2948 | P99=0.2941 | P95=0.2910 | Median=0.2417 | Mean=0.2474 | Std=0.0313
+      📐 正常圖門檻參考值              : mean+1*std=0.2787 | mean+2*std=0.3100 | mean+3*std=0.3413
+      🔬 濾波前後正常圖對照 (Ablation) : [未濾波 Raw] Max=0.3015, Mean=0.2523, Std=0.0310 vs [防誤報濾波] Max=0.2948, Mean=0.2474, Std=0.0313
+      🩺 模型過擬合自檢 (Overfit)      : 🟢 Zero-Shot Training-Free (無參數訓練，天生 0 過擬合風險)
+---------------------------------------------------------------------------
+  [4] 本次推論結果儲存資料夾清單 (Saved Directories & Files):
+      🧹 子圖塊碎片 Tile .npy 狀態  : 已於 RAM 拼接完成後立即自動銷毀 (0 殘留)
+      📂 本次時間戳記推論主資料夾   : /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_capsule_muscv2/20261115_111610
+          ├── 異常紅框三合一對照圖  : /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_capsule_muscv2/20261115_111610/anomaly_images
+          ├── 異常1:1全解析度紅框圖 : /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_capsule_muscv2/20261115_111610/anomaly_images/full_res_bbox_only
+          ├── 異常熱力圖矩陣(.npy)  : /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_capsule_muscv2/20261115_111610/amap_npy
+          ├── 完整排名報表 (TXT)    : /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_capsule_muscv2/20261115_111610/escape_ranking_report.txt
+          ├── 完整排名報表 (CSV)    : /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_capsule_muscv2/20261115_111610/escape_ranking_report.csv
+          └── 本次執行日誌 (log.txt): /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_capsule_muscv2/20261115_111610/log.txt
+===========================================================================

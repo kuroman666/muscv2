@@ -1,0 +1,23 @@
+=== MuSc-V2 Split Eval Report — Pack #3 (eval_pack_3) ===
+Source Run Dir: /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_capsule_muscv2/20261115_111610
+Score Mode: FILTERED_ROBUST | Threshold Mode: hybrid | Threshold Policy: GLOBAL_POOL_UNIFIED
+Effective Threshold (Used) : 0.3842 (Pack_Local_Thresh=0.3858 vs Global_Pool_Thresh=0.3842, Diff=+0.0016)
+Pack Local Thresh Detail : Hybrid Zero-Shot 動態門檻 (上限<=5%) = 0.3869 [正常核心上界(mu+3.5*σ_left)=0.2675, Raw_P95保底=0.3869 (Core_P95=0.2458), MinFloor=0.2700] [小樣本平滑融合 α=0.40 with Global=0.3842]
+Pack Total Images: 10 | Exported Anomaly Images: 0 | Skipped Normal Images: 10
+Normal False Positives (FPR): 0/7 (0.00%) | Escape Caught (Recall): 0/3 (0.00%)
+Normal Score Dist: Max=0.2948 | P99=0.2936 | P95=0.2884 | Median=0.2292 | Mean=0.2390 | Std=0.0326
+Ablation Compare (Normal) : Raw_Max=0.3015, Raw_Mean=0.2470 vs Filtered_Max=0.2948, Filtered_Mean=0.2390
+Threshold Ref (Mean+k*Std) : mean+1*std=0.2716 | mean+2*std=0.3042 | mean+3*std=0.3369
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+P_Rank | G_Rank | Original_Filename          | Status              | Global_Status       | Max_Score | Raw_Score | Filt_Score | Delta    | BBoxes | Saved_Anomaly_Filename
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+1      | 2      | escape_crack_004.png       | PASS_NOISE_FILTERED | PASS_NOISE_FILTERED | 0.3869    | 0.3915    | 0.3869     | -0.0046  | 0      | (微小單點噪點已自動濾除，不輸出圖片)
+2      | 3      | escape_crack_006.png       | PASS_NOISE_FILTERED | PASS_NOISE_FILTERED | 0.3845    | 0.3899    | 0.3845     | -0.0054  | 0      | (微小單點噪點已自動濾除，不輸出圖片)
+3      | 5      | escape_crack_003.png       | PASS_SKIPPED        | PASS_SKIPPED        | 0.3163    | 0.3179    | 0.3163     | -0.0015  | 0      | (未超過動態門檻，不輸出圖片)
+4      | 8      | clean_021.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.2948    | 0.3015    | 0.2948     | -0.0067  | 0      | (未超過動態門檻，不輸出圖片)
+5      | 14     | clean_014.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.2734    | 0.2759    | 0.2734     | -0.0025  | 0      | (未超過動態門檻，不輸出圖片)
+6      | 18     | clean_000.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.2499    | 0.2530    | 0.2499     | -0.0031  | 0      | (未超過動態門檻，不輸出圖片)
+7      | 24     | clean_008.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.2292    | 0.2362    | 0.2292     | -0.0069  | 0      | (未超過動態門檻，不輸出圖片)
+8      | 27     | clean_011.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.2186    | 0.2492    | 0.2186     | -0.0306  | 0      | (未超過動態門檻，不輸出圖片)
+9      | 29     | clean_001.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.2056    | 0.2083    | 0.2056     | -0.0026  | 0      | (未超過動態門檻，不輸出圖片)
+10     | 30     | clean_005.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.2016    | 0.2047    | 0.2016     | -0.0031  | 0      | (未超過動態門檻，不輸出圖片)

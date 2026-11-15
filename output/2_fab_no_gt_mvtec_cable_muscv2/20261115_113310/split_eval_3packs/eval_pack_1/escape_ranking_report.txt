@@ -1,0 +1,35 @@
+=== MuSc-V2 Split Eval Report — Pack #1 (eval_pack_1) ===
+Source Run Dir: /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_cable_muscv2/20261115_113310
+Score Mode: FILTERED_ROBUST | Threshold Mode: hybrid | Threshold Policy: GLOBAL_POOL_UNIFIED
+Effective Threshold (Used) : 0.2603 (Pack_Local_Thresh=0.3673 vs Global_Pool_Thresh=0.2603, Diff=+0.1070)
+Pack Local Thresh Detail : Hybrid Zero-Shot 動態門檻 (上限<=5%) = 0.3700 [正常核心上界(mu+3.5*σ_left)=0.2185, Raw_P95保底=0.3700 (Core_P95=0.1891), MinFloor=0.2500] [小樣本平滑融合 α=0.88 with Global=0.2603]
+Pack Total Images: 22 | Exported Anomaly Images: 4 | Skipped Normal Images: 18
+Normal False Positives (FPR): 0/18 (0.00%) | Escape Caught (Recall): 4/4 (100.00%)
+Normal Score Dist: Max=0.2526 | P99=0.2507 | P95=0.2434 | Median=0.1887 | Mean=0.1963 | Std=0.0253
+Ablation Compare (Normal) : Raw_Max=0.2542, Raw_Mean=0.2000 vs Filtered_Max=0.2526, Filtered_Mean=0.1963
+Threshold Ref (Mean+k*Std) : mean+1*std=0.2217 | mean+2*std=0.2470 | mean+3*std=0.2723
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+P_Rank | G_Rank | Original_Filename          | Status              | Global_Status       | Max_Score | Raw_Score | Filt_Score | Delta    | BBoxes | Saved_Anomaly_Filename
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+1      | 2      | escape_bent_wire_004.png   | ANOMALY             | ANOMALY             | 0.3722    | 0.3746    | 0.3722     | -0.0023  | 1      | Rank002_Score0.3722_Box01_escape_bent_wire_004.png
+2      | 3      | escape_bent_wire_006.png   | ANOMALY             | ANOMALY             | 0.3677    | 0.3683    | 0.3677     | -0.0006  | 1      | Rank003_Score0.3677_Box01_escape_bent_wire_006.png
+3      | 4      | escape_bent_wire_003.png   | ANOMALY             | ANOMALY             | 0.3589    | 0.3606    | 0.3589     | -0.0017  | 1      | Rank004_Score0.3589_Box01_escape_bent_wire_003.png
+4      | 5      | escape_bent_wire_001.png   | ANOMALY             | ANOMALY             | 0.3389    | 0.3397    | 0.3389     | -0.0009  | 1      | Rank005_Score0.3389_Box01_escape_bent_wire_001.png
+5      | 10     | clean_013.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.2526    | 0.2542    | 0.2526     | -0.0016  | 0      | (未超過動態門檻，不輸出圖片)
+6      | 12     | clean_049.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.2418    | 0.2434    | 0.2418     | -0.0017  | 0      | (未超過動態門檻，不輸出圖片)
+7      | 13     | clean_019.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.2275    | 0.2289    | 0.2275     | -0.0014  | 0      | (未超過動態門檻，不輸出圖片)
+8      | 15     | clean_056.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.2152    | 0.2180    | 0.2152     | -0.0028  | 0      | (未超過動態門檻，不輸出圖片)
+9      | 17     | clean_040.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.2090    | 0.2101    | 0.2090     | -0.0011  | 0      | (未超過動態門檻，不輸出圖片)
+10     | 19     | clean_041.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.2079    | 0.2097    | 0.2079     | -0.0019  | 0      | (未超過動態門檻，不輸出圖片)
+11     | 22     | clean_057.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.2073    | 0.2088    | 0.2073     | -0.0015  | 0      | (未超過動態門檻，不輸出圖片)
+12     | 23     | clean_051.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.2068    | 0.2077    | 0.2068     | -0.0008  | 0      | (未超過動態門檻，不輸出圖片)
+13     | 31     | clean_009.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.1933    | 0.1942    | 0.1933     | -0.0008  | 0      | (未超過動態門檻，不輸出圖片)
+14     | 39     | clean_003.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.1840    | 0.1855    | 0.1840     | -0.0015  | 0      | (未超過動態門檻，不輸出圖片)
+15     | 43     | clean_045.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.1813    | 0.1845    | 0.1813     | -0.0032  | 0      | (未超過動態門檻，不輸出圖片)
+16     | 48     | clean_006.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.1771    | 0.1790    | 0.1771     | -0.0020  | 0      | (未超過動態門檻，不輸出圖片)
+17     | 52     | clean_044.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.1765    | 0.1781    | 0.1765     | -0.0016  | 0      | (未超過動態門檻，不輸出圖片)
+18     | 53     | clean_046.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.1745    | 0.1754    | 0.1745     | -0.0009  | 0      | (未超過動態門檻，不輸出圖片)
+19     | 54     | clean_048.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.1744    | 0.1760    | 0.1744     | -0.0016  | 0      | (未超過動態門檻，不輸出圖片)
+20     | 60     | clean_052.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.1715    | 0.1722    | 0.1715     | -0.0007  | 0      | (未超過動態門檻，不輸出圖片)
+21     | 64     | clean_004.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.1686    | 0.2085    | 0.1686     | -0.0399  | 0      | (未超過動態門檻，不輸出圖片)
+22     | 65     | clean_026.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.1650    | 0.1661    | 0.1650     | -0.0011  | 0      | (未超過動態門檻，不輸出圖片)

@@ -1,0 +1,27 @@
+=== MuSc-V2 Split Eval Report — Pack #2 (eval_pack_2) ===
+Source Run Dir: /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_tile_muscv2/20261115_113329
+Score Mode: FILTERED_ROBUST | Threshold Mode: hybrid | Threshold Policy: GLOBAL_POOL_UNIFIED
+Effective Threshold (Used) : 0.2660 (Pack_Local_Thresh=0.3503 vs Global_Pool_Thresh=0.2660, Diff=+0.0843)
+Pack Local Thresh Detail : Hybrid Zero-Shot 動態門檻 (上限<=5%) = 0.3701 [正常核心上界(mu+3.5*σ_left)=0.2235, Raw_P95保底=0.3701 (Core_P95=0.1877), MinFloor=0.2500] [小樣本平滑融合 α=0.56 with Global=0.2660]
+Pack Total Images: 14 | Exported Anomaly Images: 3 | Skipped Normal Images: 11
+Normal False Positives (FPR): 0/11 (0.00%) | Escape Caught (Recall): 3/3 (100.00%)
+Normal Score Dist: Max=0.2420 | P99=0.2400 | P95=0.2318 | Median=0.1826 | Mean=0.1953 | Std=0.0224
+Ablation Compare (Normal) : Raw_Max=0.2621, Raw_Mean=0.2041 vs Filtered_Max=0.2420, Filtered_Mean=0.1953
+Threshold Ref (Mean+k*Std) : mean+1*std=0.2178 | mean+2*std=0.2402 | mean+3*std=0.2626
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+P_Rank | G_Rank | Original_Filename          | Status              | Global_Status       | Max_Score | Raw_Score | Filt_Score | Delta    | BBoxes | Saved_Anomaly_Filename
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+1      | 1      | escape_crack_005.png       | ANOMALY             | ANOMALY             | 0.3701    | 0.3712    | 0.3701     | -0.0011  | 1      | Rank001_Score0.3701_Box01_escape_crack_005.png
+2      | 4      | escape_crack_003.png       | ANOMALY             | ANOMALY             | 0.3397    | 0.3411    | 0.3397     | -0.0014  | 1      | Rank004_Score0.3397_Box01_escape_crack_003.png
+3      | 8      | escape_crack_007.png       | ANOMALY             | ANOMALY             | 0.3175    | 0.3182    | 0.3175     | -0.0007  | 1      | Rank008_Score0.3175_Box01_escape_crack_007.png
+4      | 10     | clean_015.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.2420    | 0.2621    | 0.2420     | -0.0200  | 0      | (未超過動態門檻，不輸出圖片)
+5      | 15     | clean_020.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.2216    | 0.2227    | 0.2216     | -0.0011  | 0      | (未超過動態門檻，不輸出圖片)
+6      | 16     | clean_016.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.2153    | 0.2164    | 0.2153     | -0.0010  | 0      | (未超過動態門檻，不輸出圖片)
+7      | 17     | clean_011.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.2117    | 0.2132    | 0.2117     | -0.0015  | 0      | (未超過動態門檻，不輸出圖片)
+8      | 24     | clean_003.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.1899    | 0.2044    | 0.1899     | -0.0145  | 0      | (未超過動態門檻，不輸出圖片)
+9      | 25     | clean_004.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.1826    | 0.1984    | 0.1826     | -0.0158  | 0      | (未超過動態門檻，不輸出圖片)
+10     | 28     | clean_012.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.1822    | 0.1930    | 0.1822     | -0.0108  | 0      | (未超過動態門檻，不輸出圖片)
+11     | 29     | clean_028.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.1815    | 0.1890    | 0.1815     | -0.0075  | 0      | (未超過動態門檻，不輸出圖片)
+12     | 30     | clean_032.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.1801    | 0.1851    | 0.1801     | -0.0050  | 0      | (未超過動態門檻，不輸出圖片)
+13     | 37     | clean_027.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.1725    | 0.1881    | 0.1725     | -0.0156  | 0      | (未超過動態門檻，不輸出圖片)
+14     | 38     | clean_026.png              | PASS_SKIPPED        | PASS_SKIPPED        | 0.1691    | 0.1727    | 0.1691     | -0.0036  | 0      | (未超過動態門檻，不輸出圖片)

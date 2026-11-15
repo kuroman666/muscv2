@@ -7,9 +7,10 @@ DEVICE=0
 
 # ====== [進公司需修改處 1：切換資料路徑與類別名稱] ======
 # 【公司外 MVTec-2 測試設定】
-DATA_PATH="./data/mvtec-2/can"
+# 【公司外 MVTec 測試設定】
+DATA_PATH="./data/mvtec"
 DATASET_NAME="mvtec_2"
-# CLASS_NAME="test_public"
+CLASS_NAME="bottle"
 
 # 【進公司晶圓測試設定】(進公司時將上面三行註解，取消下面三行註解)
 # DATA_PATH="./data/categorized_dataset/TMUN87"
