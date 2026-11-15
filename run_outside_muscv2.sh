@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 檔案位置: MuSc-V2/run_outside_muscv2.sh
-# 用途: MuSc-V2 廠外公開資料集 (MVTec AD / MVTec AD 2) Training-Free & Zero-Shot 無 GT 模擬抓漏與拆分評估腳本
+# 用途: MuSc-V2 廠外公開資料集 (MVTec AD / MVTec AD 2) Training-Free & Zero-Shot 無 GT 模擬抓漏與拆分評估腳本 (含自動 RAM/VRAM 背景監控)
+# 執行期間若想即時偷看資源變化，可隨時執行 tail -f output/latest_mem_monitor.log（廠外）
 set -e
 
 # ===================== [可自由修改的參數區] =====================
@@ -8,6 +9,7 @@ OUTPUT_ROOT="./output"
 DATASETS_DIR="./data"
 DINO_CKPT_PATH="auto"                 # 自動從 ~/.cache/torch/hub 或 ./hub_cache 搜尋 DINOv2/v3 權重
 BACKBONE_NAME="dinov2_vitl14"
+ENABLE_MEM_MONITOR=1                  # 1=自動背景每秒記錄 RAM & GPU VRAM 至 log；0=關閉
 
 if [ $# -ge 1 ]; then
     TARGET_CAT_DIRS=("$@")
@@ -74,6 +76,66 @@ mkdir -p "${OUTPUT_ROOT}"
 BATCH_SUMMARY_TXT="${OUTPUT_ROOT}/multi_dataset_batch_summary_muscv2_${BATCH_TIMESTAMP}.txt"
 BATCH_SUMMARY_LATEST="${OUTPUT_ROOT}/latest_multi_dataset_summary_muscv2.txt"
 BATCH_SUMMARY_CSV="${OUTPUT_ROOT}/latest_multi_dataset_summary_muscv2.csv"
+MEM_MONITOR_LOG="${OUTPUT_ROOT}/mem_monitor_${BATCH_TIMESTAMP}.log"
+MEM_MONITOR_LATEST="${OUTPUT_ROOT}/latest_mem_monitor.log"
+MEM_MONITOR_PID=""
+
+start_mem_monitor() {
+    if [ "${ENABLE_MEM_MONITOR}" -ne 1 ]; then
+        return
+    fi
+    echo "=== MuSc-V2 System RAM & GPU VRAM Monitor Started at $(date '+%Y-%m-%d %H:%M:%S') ===" > "${MEM_MONITOR_LOG}"
+    (
+        while true; do
+            TS=$(date '+%Y-%m-%d %H:%M:%S')
+            RAM_INFO=$(free -m | awk '/^Mem:/ {printf "RAM_Used=%d/%d MiB (Avail=%d MiB)", $3, $2, $7} /^Swap:/ {printf " | Swap=%d/%d MiB", $3, $2}')
+            if command -v nvidia-smi >/dev/null 2>&1; then
+                GPU_INFO=$(nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits | head -n 1 | awk -F", " '{printf "GPU_Util=%s%% | VRAM=%s/%s MiB (%.1f%%)", $1, $2, $3, ($2/$3)*100}')
+            else
+                GPU_INFO="GPU=N/A"
+            fi
+            echo "[${TS}] ${RAM_INFO} | ${GPU_INFO}" >> "${MEM_MONITOR_LOG}"
+            sleep 1
+        done
+    ) &
+    MEM_MONITOR_PID=$!
+    echo "📊 [系統資源監控已背景啟動] PID=${MEM_MONITOR_PID} -> 即時紀錄檔: ${MEM_MONITOR_LOG}"
+}
+
+cleanup_mem_monitor() {
+    if [ -n "${MEM_MONITOR_PID}" ] && kill -0 "${MEM_MONITOR_PID}" 2>/dev/null; then
+        kill "${MEM_MONITOR_PID}" 2>/dev/null || true
+        wait "${MEM_MONITOR_PID}" 2>/dev/null || true
+    fi
+    if [ -f "${MEM_MONITOR_LOG}" ]; then
+        cp -f "${MEM_MONITOR_LOG}" "${MEM_MONITOR_LATEST}"
+        python - "${MEM_MONITOR_LOG}" << 'EOF'
+import re, sys
+log_p = sys.argv[1]
+ram_used, ram_avail, vram_used = [], [], []
+vram_tot = 0
+with open(log_p, "r", encoding="utf-8") as f:
+    for line in f:
+        m_r = re.search(r"RAM_Used=(\d+)/(\d+)\s*MiB\s*\(Avail=(\d+)\s*MiB\)", line)
+        if m_r:
+            ram_used.append(int(m_r.group(1)))
+            ram_avail.append(int(m_r.group(3)))
+        m_v = re.search(r"VRAM=(\d+)/(\d+)\s*MiB", line)
+        if m_v:
+            vram_used.append(int(m_v.group(1)))
+            vram_tot = int(m_v.group(2))
+if ram_used or vram_used:
+    print("\n📈 [整趟執行資源峰值統計 (RAM & GPU VRAM Summary)]")
+    if ram_used:
+        print(f"   ├─ 系統 RAM 最高已用 : {max(ram_used)} MiB ({max(ram_used)/1024:.2f} GiB) | 最低剩餘可用 (Min Avail): {min(ram_avail)} MiB ({min(ram_avail)/1024:.2f} GiB)")
+    if vram_used:
+        print(f"   └─ GPU VRAM 最高峰值 : {max(vram_used)} / {vram_tot} MiB ({max(vram_used)/1024:.2f} GiB, {max(vram_used)/max(1,vram_tot)*100:.1f}%)")
+EOF
+    fi
+}
+
+trap cleanup_mem_monitor EXIT INT TERM
+start_mem_monitor
 
 echo "==========================================================================================================" > "${BATCH_SUMMARY_TXT}"
 echo " 📊 [MuSc-V2 (Zero-Shot) 多資料集批次推論總覽報表] 啟動時間: ${BATCH_TIMESTAMP}" >> "${BATCH_SUMMARY_TXT}"
@@ -209,10 +271,8 @@ run_single_public_category() {
     echo "    DATA_NAME: ${DATA_NAME} | 獨立輸出目錄: ${SAVE_BASE_DIR}"
     echo "==========================================================================="
 
-    # Step 0: 建立或沿用模擬盲池
     prepare_public_sim_pool "${CAT_DIR}" "${SIM_POOL_DIR}" "${POOL_MODE}" "${DEFECT_LIMIT}" "${REBUILD_POOL}"
 
-    # Step 1: 執行 1_infer_muscv2_no_gt.py (Training-Free 直接互評推論)
     echo "---------------------------------------------------------------------------"
     echo " [Step 1/2] 執行 1_infer_muscv2_no_gt.py -> Zero-Shot 互評推理與防誤報紅框定位"
     echo "---------------------------------------------------------------------------"
@@ -253,7 +313,6 @@ run_single_public_category() {
         --bg_std_thresh "${BG_STD_THRESH}" \
         ${FORCE_INFER} ${RAW_SCORE_MODE} ${DISABLE_TILING}
 
-    # Step 2: 執行 2_split_eval_results.py (評估結果拆分為多包獨立 Eval 報表)
     if [ "${RUN_SPLIT_EVAL}" -eq 1 ] && [ -f "2_split_eval_results.py" ]; then
         echo "---------------------------------------------------------------------------"
         echo " [Step 2/2] 執行 2_split_eval_results.py -> 拆分為 ${NUM_PACKS} 份獨立 Eval 報表"
@@ -284,7 +343,6 @@ run_single_public_category() {
             ${RECOMPUTE_PACK_THRESH} ${USE_SYMLINK}
     fi
 
-    # 終端機列印該類別統計總結 (計算 Recall / FPR / 分數分佈)，並 Append 寫入多資料集總表
     python - "${SAVE_BASE_DIR}" "${CAT_NAME}" "${UNIQUE_TAG}" "${BATCH_SUMMARY_TXT}" "${BATCH_SUMMARY_CSV}" << 'EOF'
 import os
 import sys
@@ -422,4 +480,5 @@ echo " ✅ 全部 ${#TARGET_CAT_DIRS[@]} 個資料集 (MuSc-V2 Zero-Shot) 執行
 echo "    📄 本次多資料集完整彙整報表 (TXT) : ${BATCH_SUMMARY_TXT}"
 echo "    📄 最新多資料集完整彙整報表 (TXT) : ${BATCH_SUMMARY_LATEST}"
 echo "    📊 最新多資料集完整彙整報表 (CSV) : ${BATCH_SUMMARY_CSV}"
+echo "    📈 系統 RAM / VRAM 資源監控日誌  : ${MEM_MONITOR_LOG}"
 echo "=========================================================================================================="
