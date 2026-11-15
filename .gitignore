@@ -1,4 +1,6 @@
 *.png
+*.jpg
+*.jpeg
 
 cat << 'EOF' >> .gitignore
 
@@ -12,3 +14,30 @@ cat << 'EOF' >> .gitignore
 __pycache__/
 *.py[cod]
 EOF
+
+# === Datasets & Archives ===
+data/*
+!data/datasets.md
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+
+# === Pretrained Weights & Caches ===
+*.pth
+*.pt
+*.bin
+*.safetensors
+*.ckpt
+hub_cache/
+checkpoints/
+
+# === Large Inference Outputs & Wafer Results ===
+wafer_escape_results/
+*.npy
+*.npz
+output/**/anomaly_images/
+output/**/amap_npy/
+output/**/_tmp_*/
+output/**/_refined_cache_tmp/

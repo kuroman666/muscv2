@@ -61,8 +61,8 @@ else
   THRESH_MODE="${THRESH_MODE:-hybrid}" # 未指定固定數值時預設使用 hybrid 動態門檻 (亦可改為 fixed / mean_std / percentile)
 fi
 SIGMA_K=3.5
-THRESHOLD="${THRESHOLD:-0.25}"
-MIN_THRESHOLD="${MIN_THRESHOLD:-0.27}"
+THRESHOLD="${THRESHOLD:-0}"
+MIN_THRESHOLD="${MIN_THRESHOLD:-0}"
 AUTO_PERCENTILE=95.0
 TOP_K=0
 CORE_RATIO=0.55

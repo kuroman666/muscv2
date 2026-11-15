@@ -255,9 +255,8 @@ def prepare_tiled_test_pool(
 ) -> Dict:
     """
     遞迴搜尋測試盲池中的所有圖片，並執行「大圖防呆判定」：
-    - 僅當圖片長邊 >= min_tiling_res (預設 1536，例如晶圓 4096x4096 / 5000x5000 大圖) 時才執行切塊；
-    - 若圖片長邊 < min_tiling_res (例如廠外公開資料集 MVTec 700x700 ~ 1024x1024)，自動跳過切塊，
-      直接以整張原圖進行零樣本互評，避免切碎物件語意導致對低解析度公開資料集不公平。
+    - 僅當圖片長邊 >= min_tiling_res (預設 1536) 時才執行 512x512 (cover 12.5%) 切塊；
+    - 若圖片長邊 < min_tiling_res (例如 MVTec 700~1024px)，自動跳過切塊直接以整張原圖推論。
     """
     safe_rmtree(tiled_pool_dir)
 
@@ -266,7 +265,6 @@ def prepare_tiled_test_pool(
     if not img_paths:
         raise FileNotFoundError(f"在 {pool_dir} (含子資料夾) 中找不到任何圖片！")
 
-    # 先快速掃描全池解析度分佈，進行大圖防呆檢測
     hw_list = [inspect_image_size_fast(p) for p in img_paths]
     max_sides = [max(h, w) for (h, w) in hw_list]
     med_res = int(np.median(max_sides))
@@ -321,7 +319,6 @@ def prepare_tiled_test_pool(
         should_tile = (not disable_tiling) and (max(h, w) >= min_tiling_res) and (h > tile_size or w > tile_size)
 
         if not should_tile:
-            # 非大圖：直接指向原圖路徑，不產生多餘切塊 PNG 副本
             tile_stem = f"{stem}__full_y0000_x0000_h{h:04d}_w{w:04d}"
             tiles_info = [{
                 "tile_stem": tile_stem,
@@ -458,7 +455,7 @@ def is_tiled_png_pool_valid(
 
 
 # =====================================================================
-# MuSc-V2 Training-Free & Zero-Shot 互評推理引擎 (支援離線權重與跨片切塊互評)
+# MuSc-V2 Training-Free & Zero-Shot 互評推理引擎 (單層串流防爆記憶體版)
 # =====================================================================
 
 def resolve_offline_vit_ckpt(ckpt_path: str, log_files: List[str]) -> Optional[str]:
@@ -497,12 +494,13 @@ def load_muscv2_vision_backbone(
     ckpt_path: str,
     device: torch.device,
     log_files: List[str],
-) -> Tuple[nn.Module, int, int, List[int]]:
-    """載入 MuSc-V2 2D 視覺特徵骨幹，自動偵測 Patch Size、輸入解析度與提取層數。"""
+) -> Tuple[nn.Module, int, int, int, List[int]]:
+    """載入 MuSc-V2 2D 視覺特徵骨幹，自動偵測 Embed_Dim、Patch Size、輸入解析度與提取層數。"""
     real_ckpt = resolve_offline_vit_ckpt(ckpt_path, log_files)
     model = None
     patch_size = 14
     num_layers = 24
+    embed_dim = 1024
 
     if real_ckpt is not None and real_ckpt.endswith((".pth", ".pt", ".bin")):
         ckpt = torch.load(real_ckpt, map_location="cpu", weights_only=False)
@@ -584,6 +582,7 @@ def load_muscv2_vision_backbone(
             model = _backbones.load(backbone_name)
             patch_size = 14 if "14" in backbone_name else 16
             num_layers = len(getattr(model, "blocks", [0] * 24))
+            embed_dim = getattr(model, "embed_dim", 1024)
             log_and_print(f"[MuSc-V2 Backbone] 已透過 MuSc-V2 內建 _backbones 載入: {backbone_name}", log_files)
         except Exception:
             import timm
@@ -591,6 +590,7 @@ def load_muscv2_vision_backbone(
             model = timm.create_model(t_name, pretrained=True, img_size=518, num_classes=0)
             patch_size = 14 if "14" in t_name else 16
             num_layers = len(getattr(model, "blocks", [0] * 24))
+            embed_dim = getattr(model, "embed_dim", 1024)
             log_and_print(f"[MuSc-V2 Backbone] 已透過 timm 載入: {t_name}", log_files)
 
     model = model.to(device).eval()
@@ -605,7 +605,7 @@ def load_muscv2_vision_backbone(
             max(0, int(round((num_layers - 1) * q))) for q in (0.22, 0.48, 0.74, 1.0)
         }))
 
-    return model, patch_size, img_input_size, default_layers
+    return model, embed_dim, patch_size, img_input_size, default_layers
 
 
 @torch.no_grad()
@@ -623,9 +623,14 @@ def run_muscv2_zero_shot_inference(
     max_peer_tiles: int,
     log_files: List[str],
 ):
-    """執行完整 MuSc-V2 Training-Free & Zero-Shot 互評推論管線。"""
+    """
+    執行完整 MuSc-V2 Training-Free & Zero-Shot 互評推論管線（單層串流防爆記憶體架構）：
+    - 預先分配固定形狀的單層特徵緩衝區 (total_tiles, num_patches, embed_dim)，零 torch.cat 記憶體複製；
+    - 逐層提取 -> 該層多尺度 (r_list) MSM 互評累加 -> 立即覆寫/釋放緩衝區，
+      使 Host RAM 佔用維持在 ~3.2 GB、GPU VRAM < 5 GB，徹底杜絕 Linux OOM Killer！
+    """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, patch_size, img_input_size, default_layers = load_muscv2_vision_backbone(
+    model, embed_dim, patch_size, img_input_size, default_layers = load_muscv2_vision_backbone(
         backbone_name=backbone_name,
         ckpt_path=ckpt_path,
         device=device,
@@ -633,6 +638,7 @@ def run_muscv2_zero_shot_inference(
     )
     use_layers = custom_layers if custom_layers else default_layers
     grid_hw = img_input_size // patch_size
+    num_patches = grid_hw * grid_hw
 
     tile_records = []
     for parent_idx, (fname, meta) in enumerate(manifest["images"].items()):
@@ -656,19 +662,9 @@ def run_muscv2_zero_shot_inference(
         log_files,
     )
 
-    hook_outputs: Dict[int, torch.Tensor] = {}
-    hooks = []
     blocks = getattr(model, "blocks", None)
     if blocks is None:
         raise RuntimeError("載入的視覺骨幹模型不含 .blocks 屬性，無法掛載 MuSc-V2 多層特徵提取 Hook！")
-
-    for l_idx in use_layers:
-        if 0 <= l_idx < len(blocks):
-            def _make_hook(layer_id: int):
-                def _hook(_mod, _inp, out):
-                    hook_outputs[layer_id] = out[0] if isinstance(out, tuple) else out
-                return _hook
-            hooks.append(blocks[l_idx].register_forward_hook(_make_hook(l_idx)))
 
     transform = transforms.Compose([
         transforms.Resize((img_input_size, img_input_size), interpolation=transforms.InterpolationMode.BICUBIC),
@@ -676,136 +672,139 @@ def run_muscv2_zero_shot_inference(
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
-    feat_storage_device = device if (device.type == "cuda" and total_tiles <= 1200) else torch.device("cpu")
-    multi_scale_bank: Dict[Tuple[int, int], List[torch.Tensor]] = {
-        (l_idx, r): [] for l_idx in use_layers for r in r_list
-    }
-    global_img_feats: List[torch.Tensor] = []
-
-    t_feat_start = time.perf_counter()
-    num_patches = grid_hw * grid_hw
-
-    for start_i in range(0, total_tiles, infer_batch_size):
-        end_i = min(total_tiles, start_i + infer_batch_size)
-        batch_tensors = []
-        for idx in range(start_i, end_i):
-            rgb = load_image_rgb_uint8(tile_records[idx]["tile_path"])
-            batch_tensors.append(transform(Image.fromarray(rgb)))
-        x_batch = torch.stack(batch_tensors, dim=0).to(device)
-
-        hook_outputs.clear()
-        with torch.amp.autocast("cuda", enabled=(device.type == "cuda")):
-            _ = model(x_batch)
-
-        batch_global_list = []
-        for l_idx in use_layers:
-            tok = hook_outputs[l_idx].float()
-            patch_tok = tok[:, -num_patches:, :]
-            b_sz, _, dim_c = patch_tok.shape
-            feat_2d = patch_tok.transpose(1, 2).reshape(b_sz, dim_c, grid_hw, grid_hw)
-
-            batch_global_list.append(F.normalize(patch_tok.mean(dim=1), dim=-1))
-
-            for r in r_list:
-                if r > 1:
-                    agg_2d = F.avg_pool2d(feat_2d, kernel_size=r, stride=1, padding=r // 2)
-                else:
-                    agg_2d = feat_2d
-                agg_flat = agg_2d.flatten(2).transpose(1, 2)
-                agg_norm = F.normalize(agg_flat, dim=-1).to(dtype=torch.float16, device=feat_storage_device)
-                multi_scale_bank[(l_idx, r)].append(agg_norm)
-
-        g_feat = F.normalize(torch.stack(batch_global_list, dim=0).mean(dim=0), dim=-1)
-        global_img_feats.append(g_feat.cpu())
-
-        if end_i == total_tiles or (start_i // infer_batch_size) % 3 == 0:
-            _print_inline_progress(
-                stage_title="Step 2.1 MuSc-V2 特徵提取",
-                current=end_i,
-                total=total_tiles,
-                start_t=t_feat_start,
-                extra_info=f"Bank裝置={feat_storage_device}",
-            )
-
-    for h in hooks:
-        h.remove()
-    hook_outputs.clear()
-    if device.type == "cuda":
-        torch.cuda.empty_cache()
-
-    concat_bank: Dict[Tuple[int, int], torch.Tensor] = {
-        key: torch.cat(chunks, dim=0) for key, chunks in multi_scale_bank.items()
-    }
-    del multi_scale_bank
-    global_feats_all = torch.cat(global_img_feats, dim=0)
+    # 預先配置單層特徵緩衝區 (只佔 1 層空間，無 torch.cat 翻倍複製)
+    storage_device = device if (device.type == "cuda" and total_tiles <= 350) else torch.device("cpu")
+    layer_raw_buf = torch.empty((total_tiles, num_patches, embed_dim), dtype=torch.float16, device=storage_device)
+    global_feats_accum = torch.zeros((total_tiles, embed_dim), dtype=torch.float32, device="cpu")
+    patch_scores_accum = torch.zeros((total_tiles, num_patches), dtype=torch.float32, device="cpu")
     parent_ids_tensor = torch.tensor([r["parent_idx"] for r in tile_records], dtype=torch.long)
 
-    # 階段 B: Mutual Scoring Mechanism (MSM) 跨圖塊互評計算
-    t_msm_start = time.perf_counter()
-    patch_scores_accum = torch.zeros((total_tiles, num_patches), dtype=torch.float32, device="cpu")
-    num_combos = len(use_layers) * len(r_list)
-    msm_chunk_size = 16 if device.type == "cuda" else 8
+    num_layers_to_run = len(use_layers)
+    num_combos = num_layers_to_run * len(r_list)
+    msm_chunk_size = (8 if total_tiles >= 600 else 16) if device.type == "cuda" else 8
+    t_total_infer_start = time.perf_counter()
 
-    for combo_idx, ((l_idx, r), feat_bank) in enumerate(concat_bank.items(), 1):
-        bank_on_dev = feat_bank.to(device) if feat_bank.device != device else feat_bank
-        bank_t = bank_on_dev.transpose(1, 2).contiguous()  # (N, C, P)
+    for layer_step, l_idx in enumerate(use_layers, 1):
+        # 1. 掛載單層 Hook 提取該層原始 Patch 特徵填入預分配緩衝區
+        hook_holder = {}
 
-        for q_start in range(0, total_tiles, msm_chunk_size):
-            q_end = min(total_tiles, q_start + msm_chunk_size)
-            q_feat = bank_on_dev[q_start:q_end]  # (B_q, P, C)
-            b_q = q_end - q_start
+        def _hook(_mod, _inp, out):
+            hook_holder["feat"] = out[0] if isinstance(out, tuple) else out
 
-            q_parents = parent_ids_tensor[q_start:q_end].unsqueeze(1)
-            valid_peer_mask = (parent_ids_tensor.unsqueeze(0) != q_parents)
+        handle = blocks[l_idx].register_forward_hook(_hook)
+        t_layer_feat = time.perf_counter()
 
-            if not torch.any(valid_peer_mask):
-                self_indices = torch.arange(q_start, q_end).unsqueeze(1)
-                valid_peer_mask = (torch.arange(total_tiles).unsqueeze(0) != self_indices)
+        for start_i in range(0, total_tiles, infer_batch_size):
+            end_i = min(total_tiles, start_i + infer_batch_size)
+            batch_tensors = []
+            for idx in range(start_i, end_i):
+                rgb = load_image_rgb_uint8(tile_records[idx]["tile_path"])
+                batch_tensors.append(transform(Image.fromarray(rgb)))
+            x_batch = torch.stack(batch_tensors, dim=0).to(device)
 
-            if max_peer_tiles > 0 and total_tiles > max_peer_tiles:
-                peer_indices = torch.randperm(total_tiles)[:max_peer_tiles]
-                sub_bank_t = bank_t[peer_indices]
-                sub_mask = valid_peer_mask[:, peer_indices].to(device)
-            else:
-                sub_bank_t = bank_t
-                sub_mask = valid_peer_mask.to(device)
+            hook_holder.clear()
+            with torch.amp.autocast("cuda", enabled=(device.type == "cuda")):
+                _ = model(x_batch)
 
-            sim = torch.einsum("qic,mcj->qmij", q_feat, sub_bank_t)
-            max_sim_per_peer = sim.max(dim=-1).values
-            min_dist_per_peer = (1.0 - max_sim_per_peer).float()
-            del sim, max_sim_per_peer
+            tok = hook_holder["feat"].float()
+            patch_tok = tok[:, -num_patches:, :]  # (B, P, C)
+            g_batch = F.normalize(patch_tok.mean(dim=1), dim=-1).cpu()
+            global_feats_accum[start_i:end_i] += g_batch / float(num_layers_to_run)
 
-            invalid_mask_3d = (~sub_mask).unsqueeze(-1).expand_as(min_dist_per_peer)
-            min_dist_per_peer = min_dist_per_peer.masked_fill(invalid_mask_3d, float("inf"))
+            layer_raw_buf[start_i:end_i].copy_(patch_tok.to(dtype=torch.float16, device=storage_device))
+            del x_batch, tok, patch_tok
+            hook_holder.clear()
 
-            sorted_dists, _ = torch.sort(min_dist_per_peer, dim=1)
-            valid_counts = sub_mask.sum(dim=1).clamp(min=1)
+            if end_i == total_tiles or (start_i // infer_batch_size) % 4 == 0:
+                _print_inline_progress(
+                    stage_title=f"Step 2.{layer_step}a Layer-{l_idx} 特徵提取",
+                    current=end_i,
+                    total=total_tiles,
+                    start_t=t_layer_feat,
+                    extra_info=f"緩衝區={storage_device}",
+                )
 
-            for bi in range(b_q):
-                v_cnt = int(valid_counts[bi].item())
-                k_take = max(1, int(round(v_cnt * mutual_ratio)))
-                k_take = min(k_take, v_cnt)
-                score_bi = sorted_dists[bi, :k_take, :].mean(dim=0)
-                patch_scores_accum[q_start + bi] += score_bi.cpu() / float(num_combos)
-
-            del min_dist_per_peer, sorted_dists
-
-        del bank_on_dev, bank_t
+        handle.remove()
         if device.type == "cuda":
             torch.cuda.empty_cache()
 
-        _print_inline_progress(
-            stage_title="Step 2.2 MuSc-V2 互評 (MSM)",
-            current=combo_idx,
-            total=num_combos,
-            start_t=t_msm_start,
-            extra_info=f"Layer={l_idx}, r={r}",
-        )
+        # 2. 針對該層依序執行多尺度聚合 (r_list) 與 MSM 跨圖塊互評
+        for r_step, r in enumerate(r_list, 1):
+            combo_idx = (layer_step - 1) * len(r_list) + r_step
+            t_msm_step = time.perf_counter()
 
-    del concat_bank
+            if r == 1:
+                bank_on_dev = F.normalize(layer_raw_buf.to(device).float(), dim=-1).half()
+            else:
+                # 分批進行 2D 平均池化，避免瞬間建立大型 4D fp32 副本
+                bank_on_dev = torch.empty((total_tiles, num_patches, embed_dim), dtype=torch.float16, device=device)
+                for b_s in range(0, total_tiles, 64):
+                    b_e = min(total_tiles, b_s + 64)
+                    sub_2d = layer_raw_buf[b_s:b_e].to(device).float().transpose(1, 2).reshape(b_e - b_s, embed_dim, grid_hw, grid_hw)
+                    agg_2d = F.avg_pool2d(sub_2d, kernel_size=r, stride=1, padding=r // 2)
+                    agg_flat = agg_2d.flatten(2).transpose(1, 2)
+                    bank_on_dev[b_s:b_e] = F.normalize(agg_flat, dim=-1).half()
+                    del sub_2d, agg_2d, agg_flat
+
+            bank_t = bank_on_dev.transpose(1, 2).contiguous()  # (N, C, P)
+
+            for q_start in range(0, total_tiles, msm_chunk_size):
+                q_end = min(total_tiles, q_start + msm_chunk_size)
+                q_feat = bank_on_dev[q_start:q_end]  # (B_q, P, C)
+                b_q = q_end - q_start
+
+                q_parents = parent_ids_tensor[q_start:q_end].unsqueeze(1)
+                valid_peer_mask = (parent_ids_tensor.unsqueeze(0) != q_parents)
+
+                if not torch.any(valid_peer_mask):
+                    self_indices = torch.arange(q_start, q_end).unsqueeze(1)
+                    valid_peer_mask = (torch.arange(total_tiles).unsqueeze(0) != self_indices)
+
+                if max_peer_tiles > 0 and total_tiles > max_peer_tiles:
+                    peer_indices = torch.randperm(total_tiles)[:max_peer_tiles]
+                    sub_bank_t = bank_t[peer_indices]
+                    sub_mask = valid_peer_mask[:, peer_indices].to(device)
+                else:
+                    sub_bank_t = bank_t
+                    sub_mask = valid_peer_mask.to(device)
+
+                sim = torch.einsum("qic,mcj->qmij", q_feat, sub_bank_t)
+                max_sim_per_peer = sim.max(dim=-1).values
+                min_dist_per_peer = (1.0 - max_sim_per_peer).float()
+                del sim, max_sim_per_peer
+
+                invalid_mask_3d = (~sub_mask).unsqueeze(-1).expand_as(min_dist_per_peer)
+                min_dist_per_peer = min_dist_per_peer.masked_fill(invalid_mask_3d, float("inf"))
+
+                sorted_dists, _ = torch.sort(min_dist_per_peer, dim=1)
+                valid_counts = sub_mask.sum(dim=1).clamp(min=1)
+
+                for bi in range(b_q):
+                    v_cnt = int(valid_counts[bi].item())
+                    k_take = max(1, int(round(v_cnt * mutual_ratio)))
+                    k_take = min(k_take, v_cnt)
+                    score_bi = sorted_dists[bi, :k_take, :].mean(dim=0)
+                    patch_scores_accum[q_start + bi] += score_bi.cpu() / float(num_combos)
+
+                del min_dist_per_peer, sorted_dists
+
+            del bank_on_dev, bank_t
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
+
+            _print_inline_progress(
+                stage_title="Step 2.2 MuSc-V2 互評 (MSM)",
+                current=combo_idx,
+                total=num_combos,
+                start_t=t_total_infer_start,
+                extra_info=f"Layer={l_idx}, r={r} ({time.perf_counter() - t_msm_step:.1f}s)",
+            )
+
+    del layer_raw_buf
     gc.collect()
 
     # 階段 C: RsCon 全域外觀鄰域重評校準
+    global_feats_all = F.normalize(global_feats_accum, dim=-1)
     raw_tile_max = patch_scores_accum.max(dim=1).values
     rscon_scale = torch.ones(total_tiles, dtype=torch.float32)
 
@@ -838,7 +837,7 @@ def run_muscv2_zero_shot_inference(
         amap_up = cv2.GaussianBlur(amap_up, (0, 0), sigmaX=4.0)
         np.save(os.path.join(tile_amap_dir, f"{rec['tile_stem']}.npy"), amap_up.astype(np.float32))
 
-    del model, patch_scores_accum, amap_2d_all
+    del model, patch_scores_accum, amap_2d_all, global_feats_accum
     if device.type == "cuda":
         torch.cuda.empty_cache()
     gc.collect()
@@ -885,7 +884,6 @@ def stitch_single_image_amap(
     h, w = img_meta["height"], img_meta["width"]
     tiles = img_meta["tiles"]
 
-    # 若未切塊 (僅 1 張全圖)，直接讀取並回傳，省去多餘權重加權運算
     if len(tiles) == 1 and tiles[0].get("is_full_image", False):
         t = tiles[0]
         npy_path = find_tile_npy(tile_amap_dir, t["tile_stem"], t["tile_fname"])

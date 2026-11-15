@@ -13,13 +13,13 @@ if [ $# -ge 1 ]; then
     TARGET_CAT_DIRS=("$@")
 else
     TARGET_CAT_DIRS=(
-        "${DATASETS_DIR}/mvtec/capsule"
-        # "${DATASETS_DIR}/mvtec-2/can"
-        "${DATASETS_DIR}/mvtec/bottle"
-        "${DATASETS_DIR}/mvtec/cable"
-        "${DATASETS_DIR}/mvtec/grid"
-        "${DATASETS_DIR}/mvtec/tile"
-        "${DATASETS_DIR}/mvtec/transistor"
+        # "${DATASETS_DIR}/mvtec/capsule"
+        "${DATASETS_DIR}/mvtec-2/can"
+        # "${DATASETS_DIR}/mvtec/bottle"
+        # "${DATASETS_DIR}/mvtec/cable"
+        # "${DATASETS_DIR}/mvtec/grid"
+        # "${DATASETS_DIR}/mvtec/tile"
+        # "${DATASETS_DIR}/mvtec/transistor"
     )
 fi
 
@@ -39,7 +39,7 @@ MAX_PEER_TILES=400
 # --- 動態門檻與防誤報超參數 ---
 THRESH_MODE="hybrid"
 SIGMA_K=3.5
-THRESHOLD=0.25
+THRESHOLD=0
 MIN_THRESHOLD=0
 AUTO_PERCENTILE=95.0
 TOP_K=0

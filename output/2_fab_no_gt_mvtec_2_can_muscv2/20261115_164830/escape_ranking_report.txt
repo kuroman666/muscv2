@@ -1,0 +1,121 @@
+=== MuSc-V2 High-Res Zero-Shot Anomaly Detection Report (Training-Free) ===
+Score Mode: FILTERED_ROBUST | Threshold Mode: hybrid | Effective Threshold: 0.4159 | Wafer Edge Mode: auto (Margin: 0.040)
+Core Box Ratio: 0.55 | Exported Anomaly Images: 1 | Skipped Normal Images: 79
+Non-Golden Normal Score Dist: Max=0.4227 | P99=0.4172 | P95=0.4003 | Median=0.3735 | Mean=0.3727 | Std=0.0150
+Ablation Compare (Normal)   : Raw_Max=0.4315, Raw_Mean=0.3809 vs Filtered_Max=0.4227, Filtered_Mean=0.3727
+Threshold Ref (Mean+k*Std)  : mean+1*std=0.3877 | mean+2*std=0.4027 | mean+3*std=0.4177
+Overfit Diagnostic          : 🟢 Training-Free Zero-Shot (No Training Overfit)
+-------------------------------------------------------------------------------------------------------------------------------------------------
+Rank  | Original_Filename          | Status              | Max_Score | Raw_Score | Filt_Score | Delta    | BBoxes | Saved_Anomaly_Filename
+-------------------------------------------------------------------------------------------------------------------------------------------------
+1     | clean_002_shift_3.png      | ANOMALY             | 0.4227    | 0.4315    | 0.4227     | -0.0088  | 1      | Rank001_Score0.4227_Box01_clean_002_shift_3.png
+2     | clean_002_shift_2.png      | PASS_SKIPPED        | 0.4149    | 0.4228    | 0.4149     | -0.0079  | 0      | (未超過動態門檻，不輸出圖片)
+3     | clean_002_overexposed.png  | PASS_SKIPPED        | 0.4017    | 0.4110    | 0.4017     | -0.0093  | 0      | (未超過動態門檻，不輸出圖片)
+4     | clean_002_shift_1.png      | PASS_SKIPPED        | 0.4005    | 0.4104    | 0.4005     | -0.0099  | 0      | (未超過動態門檻，不輸出圖片)
+5     | clean_009_shift_2.png      | PASS_SKIPPED        | 0.4001    | 0.4065    | 0.4001     | -0.0063  | 0      | (未超過動態門檻，不輸出圖片)
+6     | clean_002_regular.png      | PASS_SKIPPED        | 0.3954    | 0.4037    | 0.3954     | -0.0082  | 0      | (未超過動態門檻，不輸出圖片)
+7     | clean_009_shift_3.png      | PASS_SKIPPED        | 0.3947    | 0.4021    | 0.3947     | -0.0074  | 0      | (未超過動態門檻，不輸出圖片)
+8     | escape_bad_000_overexposed.png | PASS_SKIPPED        | 0.3908    | 0.4016    | 0.3908     | -0.0108  | 0      | (未超過動態門檻，不輸出圖片)
+9     | escape_bad_001_overexposed.png | PASS_SKIPPED        | 0.3897    | 0.3984    | 0.3897     | -0.0087  | 0      | (未超過動態門檻，不輸出圖片)
+10    | escape_bad_000_regular.png | PASS_SKIPPED        | 0.3896    | 0.4007    | 0.3896     | -0.0111  | 0      | (未超過動態門檻，不輸出圖片)
+11    | clean_002_underexposed.png | PASS_SKIPPED        | 0.3888    | 0.3967    | 0.3888     | -0.0079  | 0      | (未超過動態門檻，不輸出圖片)
+12    | clean_010_overexposed.png  | PASS_SKIPPED        | 0.3879    | 0.3970    | 0.3879     | -0.0091  | 0      | (未超過動態門檻，不輸出圖片)
+13    | escape_bad_000_shift_1.png | PASS_SKIPPED        | 0.3878    | 0.3968    | 0.3878     | -0.0090  | 0      | (未超過動態門檻，不輸出圖片)
+14    | escape_bad_000_underexposed.png | PASS_SKIPPED        | 0.3867    | 0.3984    | 0.3867     | -0.0117  | 0      | (未超過動態門檻，不輸出圖片)
+15    | escape_bad_001_regular.png | PASS_SKIPPED        | 0.3863    | 0.3949    | 0.3863     | -0.0086  | 0      | (未超過動態門檻，不輸出圖片)
+16    | escape_bad_000_shift_3.png | PASS_SKIPPED        | 0.3825    | 0.3914    | 0.3825     | -0.0088  | 0      | (未超過動態門檻，不輸出圖片)
+17    | clean_003_regular.png      | PASS_SKIPPED        | 0.3818    | 0.3907    | 0.3818     | -0.0089  | 0      | (未超過動態門檻，不輸出圖片)
+18    | clean_010_underexposed.png | PASS_SKIPPED        | 0.3818    | 0.3901    | 0.3818     | -0.0083  | 0      | (未超過動態門檻，不輸出圖片)
+19    | clean_010_regular.png      | PASS_SKIPPED        | 0.3811    | 0.3900    | 0.3811     | -0.0089  | 0      | (未超過動態門檻，不輸出圖片)
+20    | clean_003_overexposed.png  | PASS_SKIPPED        | 0.3804    | 0.3901    | 0.3804     | -0.0097  | 0      | (未超過動態門檻，不輸出圖片)
+21    | clean_000_shift_1.png      | PASS_SKIPPED        | 0.3803    | 0.3904    | 0.3803     | -0.0100  | 0      | (未超過動態門檻，不輸出圖片)
+22    | clean_005_shift_1.png      | PASS_SKIPPED        | 0.3800    | 0.3916    | 0.3800     | -0.0116  | 0      | (未超過動態門檻，不輸出圖片)
+23    | escape_bad_000_shift_2.png | PASS_SKIPPED        | 0.3799    | 0.3909    | 0.3799     | -0.0110  | 0      | (未超過動態門檻，不輸出圖片)
+24    | clean_000_shift_3.png      | PASS_SKIPPED        | 0.3798    | 0.3896    | 0.3798     | -0.0098  | 0      | (未超過動態門檻，不輸出圖片)
+25    | clean_003_underexposed.png | PASS_SKIPPED        | 0.3797    | 0.3884    | 0.3797     | -0.0087  | 0      | (未超過動態門檻，不輸出圖片)
+26    | clean_000_underexposed.png | PASS_SKIPPED        | 0.3797    | 0.3892    | 0.3797     | -0.0095  | 0      | (未超過動態門檻，不輸出圖片)
+27    | clean_009_shift_1.png      | PASS_SKIPPED        | 0.3794    | 0.3852    | 0.3794     | -0.0058  | 0      | (未超過動態門檻，不輸出圖片)
+28    | clean_010_shift_1.png      | PASS_SKIPPED        | 0.3787    | 0.3862    | 0.3787     | -0.0075  | 0      | (未超過動態門檻，不輸出圖片)
+29    | clean_010_shift_2.png      | PASS_SKIPPED        | 0.3785    | 0.3865    | 0.3785     | -0.0080  | 0      | (未超過動態門檻，不輸出圖片)
+30    | clean_003_shift_1.png      | PASS_SKIPPED        | 0.3785    | 0.3878    | 0.3785     | -0.0093  | 0      | (未超過動態門檻，不輸出圖片)
+31    | clean_005_shift_3.png      | PASS_SKIPPED        | 0.3784    | 0.3892    | 0.3784     | -0.0108  | 0      | (未超過動態門檻，不輸出圖片)
+32    | clean_000_overexposed.png  | PASS_SKIPPED        | 0.3781    | 0.3875    | 0.3781     | -0.0094  | 0      | (未超過動態門檻，不輸出圖片)
+33    | clean_009_overexposed.png  | PASS_SKIPPED        | 0.3774    | 0.3831    | 0.3774     | -0.0057  | 0      | (未超過動態門檻，不輸出圖片)
+34    | clean_000_shift_2.png      | PASS_SKIPPED        | 0.3770    | 0.3868    | 0.3770     | -0.0098  | 0      | (未超過動態門檻，不輸出圖片)
+35    | clean_000_regular.png      | PASS_SKIPPED        | 0.3768    | 0.3875    | 0.3768     | -0.0107  | 0      | (未超過動態門檻，不輸出圖片)
+36    | clean_005_overexposed.png  | PASS_SKIPPED        | 0.3766    | 0.3869    | 0.3766     | -0.0103  | 0      | (未超過動態門檻，不輸出圖片)
+37    | clean_005_underexposed.png | PASS_SKIPPED        | 0.3760    | 0.3875    | 0.3760     | -0.0115  | 0      | (未超過動態門檻，不輸出圖片)
+38    | clean_001_overexposed.png  | PASS_SKIPPED        | 0.3760    | 0.3831    | 0.3760     | -0.0071  | 0      | (未超過動態門檻，不輸出圖片)
+39    | clean_003_shift_2.png      | PASS_SKIPPED        | 0.3756    | 0.3861    | 0.3756     | -0.0105  | 0      | (未超過動態門檻，不輸出圖片)
+40    | clean_005_regular.png      | PASS_SKIPPED        | 0.3754    | 0.3862    | 0.3754     | -0.0108  | 0      | (未超過動態門檻，不輸出圖片)
+41    | clean_007_underexposed.png | PASS_SKIPPED        | 0.3746    | 0.3833    | 0.3746     | -0.0087  | 0      | (未超過動態門檻，不輸出圖片)
+42    | clean_003_shift_3.png      | PASS_SKIPPED        | 0.3740    | 0.3848    | 0.3740     | -0.0108  | 0      | (未超過動態門檻，不輸出圖片)
+43    | clean_010_shift_3.png      | PASS_SKIPPED        | 0.3738    | 0.3815    | 0.3738     | -0.0077  | 0      | (未超過動態門檻，不輸出圖片)
+44    | clean_009_regular.png      | PASS_SKIPPED        | 0.3737    | 0.3800    | 0.3737     | -0.0062  | 0      | (未超過動態門檻，不輸出圖片)
+45    | clean_005_shift_2.png      | PASS_SKIPPED        | 0.3733    | 0.3820    | 0.3733     | -0.0087  | 0      | (未超過動態門檻，不輸出圖片)
+46    | clean_008_shift_2.png      | PASS_SKIPPED        | 0.3729    | 0.3861    | 0.3729     | -0.0132  | 0      | (未超過動態門檻，不輸出圖片)
+47    | clean_007_shift_1.png      | PASS_SKIPPED        | 0.3728    | 0.3789    | 0.3728     | -0.0060  | 0      | (未超過動態門檻，不輸出圖片)
+48    | clean_008_shift_3.png      | PASS_SKIPPED        | 0.3723    | 0.3842    | 0.3723     | -0.0119  | 0      | (未超過動態門檻，不輸出圖片)
+49    | clean_009_underexposed.png | PASS_SKIPPED        | 0.3717    | 0.3771    | 0.3717     | -0.0054  | 0      | (未超過動態門檻，不輸出圖片)
+50    | clean_001_shift_1.png      | PASS_SKIPPED        | 0.3712    | 0.3786    | 0.3712     | -0.0074  | 0      | (未超過動態門檻，不輸出圖片)
+51    | clean_007_overexposed.png  | PASS_SKIPPED        | 0.3700    | 0.3788    | 0.3700     | -0.0088  | 0      | (未超過動態門檻，不輸出圖片)
+52    | clean_001_shift_3.png      | PASS_SKIPPED        | 0.3697    | 0.3771    | 0.3697     | -0.0074  | 0      | (未超過動態門檻，不輸出圖片)
+53    | clean_001_underexposed.png | PASS_SKIPPED        | 0.3696    | 0.3767    | 0.3696     | -0.0071  | 0      | (未超過動態門檻，不輸出圖片)
+54    | clean_007_regular.png      | PASS_SKIPPED        | 0.3690    | 0.3775    | 0.3690     | -0.0085  | 0      | (未超過動態門檻，不輸出圖片)
+55    | clean_007_shift_3.png      | PASS_SKIPPED        | 0.3688    | 0.3769    | 0.3688     | -0.0081  | 0      | (未超過動態門檻，不輸出圖片)
+56    | clean_001_shift_2.png      | PASS_SKIPPED        | 0.3684    | 0.3734    | 0.3684     | -0.0050  | 0      | (未超過動態門檻，不輸出圖片)
+57    | clean_001_regular.png      | PASS_SKIPPED        | 0.3680    | 0.3741    | 0.3680     | -0.0061  | 0      | (未超過動態門檻，不輸出圖片)
+58    | clean_006_shift_3.png      | PASS_SKIPPED        | 0.3667    | 0.3719    | 0.3667     | -0.0052  | 0      | (未超過動態門檻，不輸出圖片)
+59    | clean_006_shift_1.png      | PASS_SKIPPED        | 0.3663    | 0.3746    | 0.3663     | -0.0083  | 0      | (未超過動態門檻，不輸出圖片)
+60    | clean_011_shift_1.png      | PASS_SKIPPED        | 0.3654    | 0.3699    | 0.3654     | -0.0045  | 0      | (未超過動態門檻，不輸出圖片)
+61    | clean_008_shift_1.png      | PASS_SKIPPED        | 0.3650    | 0.3726    | 0.3650     | -0.0077  | 0      | (未超過動態門檻，不輸出圖片)
+62    | clean_006_underexposed.png | PASS_SKIPPED        | 0.3645    | 0.3728    | 0.3645     | -0.0082  | 0      | (未超過動態門檻，不輸出圖片)
+63    | clean_011_shift_3.png      | PASS_SKIPPED        | 0.3642    | 0.3691    | 0.3642     | -0.0049  | 0      | (未超過動態門檻，不輸出圖片)
+64    | clean_006_shift_2.png      | PASS_SKIPPED        | 0.3623    | 0.3706    | 0.3623     | -0.0083  | 0      | (未超過動態門檻，不輸出圖片)
+65    | clean_004_shift_2.png      | PASS_SKIPPED        | 0.3616    | 0.3664    | 0.3616     | -0.0048  | 0      | (未超過動態門檻，不輸出圖片)
+66    | clean_004_shift_3.png      | PASS_SKIPPED        | 0.3611    | 0.3662    | 0.3611     | -0.0051  | 0      | (未超過動態門檻，不輸出圖片)
+67    | clean_006_overexposed.png  | PASS_SKIPPED        | 0.3592    | 0.3670    | 0.3592     | -0.0079  | 0      | (未超過動態門檻，不輸出圖片)
+68    | clean_007_shift_2.png      | PASS_SKIPPED        | 0.3576    | 0.3656    | 0.3576     | -0.0080  | 0      | (未超過動態門檻，不輸出圖片)
+69    | clean_008_regular.png      | PASS_SKIPPED        | 0.3569    | 0.3646    | 0.3569     | -0.0077  | 0      | (未超過動態門檻，不輸出圖片)
+70    | clean_004_overexposed.png  | PASS_SKIPPED        | 0.3566    | 0.3675    | 0.3566     | -0.0109  | 0      | (未超過動態門檻，不輸出圖片)
+71    | clean_006_regular.png      | PASS_SKIPPED        | 0.3559    | 0.3640    | 0.3559     | -0.0081  | 0      | (未超過動態門檻，不輸出圖片)
+72    | clean_004_regular.png      | PASS_SKIPPED        | 0.3542    | 0.3650    | 0.3542     | -0.0108  | 0      | (未超過動態門檻，不輸出圖片)
+73    | clean_008_overexposed.png  | PASS_SKIPPED        | 0.3541    | 0.3644    | 0.3541     | -0.0104  | 0      | (未超過動態門檻，不輸出圖片)
+74    | clean_008_underexposed.png | PASS_SKIPPED        | 0.3537    | 0.3611    | 0.3537     | -0.0074  | 0      | (未超過動態門檻，不輸出圖片)
+75    | clean_004_underexposed.png | PASS_SKIPPED        | 0.3527    | 0.3629    | 0.3527     | -0.0102  | 0      | (未超過動態門檻，不輸出圖片)
+76    | clean_004_shift_1.png      | PASS_SKIPPED        | 0.3467    | 0.3552    | 0.3467     | -0.0085  | 0      | (未超過動態門檻，不輸出圖片)
+77    | clean_011_overexposed.png  | PASS_SKIPPED        | 0.3467    | 0.3509    | 0.3467     | -0.0043  | 0      | (未超過動態門檻，不輸出圖片)
+78    | clean_011_underexposed.png | PASS_SKIPPED        | 0.3454    | 0.3498    | 0.3454     | -0.0044  | 0      | (未超過動態門檻，不輸出圖片)
+79    | clean_011_shift_2.png      | PASS_SKIPPED        | 0.3453    | 0.3521    | 0.3453     | -0.0068  | 0      | (未超過動態門檻，不輸出圖片)
+80    | clean_011_regular.png      | PASS_SKIPPED        | 0.3430    | 0.3470    | 0.3430     | -0.0040  | 0      | (未超過動態門檻，不輸出圖片)
+
+
+===========================================================================
+ [✅ MuSc-V2 推論完成 — 整體時間與所有檔案儲存位置總覽]
+---------------------------------------------------------------------------
+  [1] 整體推論階段總時間 (Total Inference Time) : 00:03:46.35 (226.35 秒)
+      ├─ Step 1 大圖高解析度切塊 (1200 塊)               : 00:00:00.00 (0.00 秒) (Cached)
+      ├─ Step 2 MuSc-V2 Zero-Shot 互評推理       : 00:03:37.53 (217.53 秒)
+      ├─ Step 3 RAM 縫合銷毀碎片與防誤報濾波畫框 : 00:00:08.82 (8.82 秒)
+      └─ 平均每張原圖推論耗時 (80 張原圖)         : 2.83 秒/張
+---------------------------------------------------------------------------
+  [2] 任務全程總執行時間 (Total Wall Time)      : 00:03:46.35 (226.35 秒)
+---------------------------------------------------------------------------
+  [3] 門檻篩選統計與分數分佈 (Score=FILTERED, Mode=hybrid, Eff_Thresh=0.4159):
+      🚨 超過門檻判定異常並畫框輸出 : 1 張
+      ✅ 未達門檻或微塵濾除直接略過 : 79 張 (不輸出圖片)
+      📊 正常圖分數分佈 (防誤報濾波後) : Max=0.4227 | P99=0.4172 | P95=0.4003 | Median=0.3735 | Mean=0.3727 | Std=0.0150
+      📐 正常圖門檻參考值              : mean+1*std=0.3877 | mean+2*std=0.4027 | mean+3*std=0.4177
+      🔬 濾波前後正常圖對照 (Ablation) : [未濾波 Raw] Max=0.4315, Mean=0.3809, Std=0.0157 vs [防誤報濾波] Max=0.4227, Mean=0.3727, Std=0.0150
+      🩺 模型過擬合自檢 (Overfit)      : 🟢 Zero-Shot Training-Free (無參數訓練，天生 0 過擬合風險)
+---------------------------------------------------------------------------
+  [4] 本次推論結果儲存資料夾清單 (Saved Directories & Files):
+      🧹 子圖塊碎片 Tile .npy 狀態  : 已於 RAM 拼接完成後立即自動銷毀 (0 殘留)
+      📂 本次時間戳記推論主資料夾   : /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_2_can_muscv2/20261115_164830
+          ├── 異常紅框三合一對照圖  : /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_2_can_muscv2/20261115_164830/anomaly_images
+          ├── 異常1:1全解析度紅框圖 : /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_2_can_muscv2/20261115_164830/anomaly_images/full_res_bbox_only
+          ├── 異常熱力圖矩陣(.npy)  : /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_2_can_muscv2/20261115_164830/amap_npy
+          ├── 完整排名報表 (TXT)    : /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_2_can_muscv2/20261115_164830/escape_ranking_report.txt
+          ├── 完整排名報表 (CSV)    : /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_2_can_muscv2/20261115_164830/escape_ranking_report.csv
+          └── 本次執行日誌 (log.txt): /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_2_can_muscv2/20261115_164830/log.txt
+===========================================================================
