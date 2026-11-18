@@ -1,0 +1,13 @@
+
+===========================================================================
+[MuSc-V2 Zero-Shot 無GT抓漏純推論啟動時間] 2026-11-18 10:24:06 (UTC+8)
+[本次專屬時間戳記輸出目錄] /home/kenny/project/muscv2/output/2_fab_no_gt_YDFID_2_SL1_muscv2/20261118_102406
+===========================================================================
+
+[🛡️ 防呆檢測 — 偵測為中低解析度資料集，自動跳過切塊] 盲池解析度範圍: 512~512px (中位數=512px) < 大圖門檻 (1536px)。
+   ↳ 為確保對廠外公開資料集之公平性與語意完整性，已自動切換為【整張原圖直接推論 (Full-Image Mode)】！
+[MuSc-V2 Backbone] 已自動找到本機離線權重 (DINOV2_VITL14): /home/kenny/project/muscv2/dinov2_vitl14_pretrain.pth
+[MuSc-V2 Backbone 規格偵測] Embed=1024 | Patch=14x14 | Blocks=24 | Registers=False
+[MuSc-V2 Backbone] 已透過 timm (vit_large_patch14_dinov2.lvd142m) 離線載入本地權重 (missing=0, unexpected=1)
+
+[Step 2 — MuSc-V2 Zero-Shot 互評推理 (整張原圖直接互評 (Full-Image))] Device=cuda | Units=490 | Layers=[5, 11, 17, 23] | r_list=[1, 3, 5] | Mutual_Ratio=0.30 | RsCon=0.15

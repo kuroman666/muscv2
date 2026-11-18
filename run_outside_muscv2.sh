@@ -27,8 +27,8 @@ else
         # "${DATASETS_DIR}/Mura2_bg_mask"
 
         # --- 新資料集 YDFID-2 (可指定單一類別，或直接填入 YDFID-2 自動掃描全部 19 個類別) ---
-        "${DATASETS_DIR}/YDFID-2/CL1"
-        # "${DATASETS_DIR}/YDFID-2"
+        #"${DATASETS_DIR}/YDFID-2/CL1"
+        "${DATASETS_DIR}/YDFID-2"
     )
 fi
 
@@ -147,7 +147,7 @@ start_mem_monitor
 echo "==========================================================================================================" > "${BATCH_SUMMARY_TXT}"
 echo " 📊 [MuSc-V2 (Zero-Shot) 多資料集批次推論總覽報表] 啟動時間: ${BATCH_TIMESTAMP}" >> "${BATCH_SUMMARY_TXT}"
 echo "==========================================================================================================" >> "${BATCH_SUMMARY_TXT}"
-echo "Dataset_Key,Category,Total_Imgs,Normal_Imgs,Escape_Imgs,Eff_Threshold,Recall_Pct,FPR_Pct,Normal_Mean,Normal_Std,Infer_Dir,Report_CSV" > "${BATCH_SUMMARY_CSV}"
+echo "Dataset_Key,Category,Total_Imgs,Normal_Imgs,Escape_Imgs,Eff_Threshold,I_AUROC,I_AP,F1_Max,Recall_Pct,FPR_Pct,Precision_Pct,F1_Cur_Pct,Normal_Mean,Normal_Std,Infer_Dir,Report_CSV" > "${BATCH_SUMMARY_CSV}"
 
 prepare_public_sim_pool() {
     local SRC_CAT_DIR="$1"
@@ -391,7 +391,7 @@ run_single_public_category() {
             ${RECOMPUTE_PACK_THRESH} ${USE_SYMLINK}
     fi
 
-    python - "${SAVE_BASE_DIR}" "${CAT_NAME}" "${UNIQUE_TAG}" "${BATCH_SUMMARY_TXT}" "${BATCH_SUMMARY_CSV}" << 'PYEOF'
+python - "${SAVE_BASE_DIR}" "${CAT_NAME}" "${UNIQUE_TAG}" "${BATCH_SUMMARY_TXT}" "${BATCH_SUMMARY_CSV}" << 'PYEOF'
 import os
 import sys
 import re
@@ -420,7 +420,7 @@ eff_thresh = 0.25
 score_mode_str = "FILTERED_ROBUST"
 if os.path.exists(latest_txt):
     with open(latest_txt, "r", encoding="utf-8") as tf:
-        txt_head = tf.read(1500)
+        txt_head = tf.read(1800)
         m = re.search(r"Effective Threshold:\s*([0-9.]+)", txt_head)
         if m:
             eff_thresh = float(m.group(1))
@@ -463,25 +463,62 @@ caught_escape = [r for r in escape_defects if "ANOMALY" in r["Status"]]
 fpr_pct = (len(fp_normal) / len(target_normal) * 100.0) if target_normal else 0.0
 recall_pct = (len(caught_escape) / len(escape_defects) * 100.0) if escape_defects else 0.0
 
+auroc_val = ap_val = f1_max_val = best_th_val = 0.0
+prec_pct = f1_cur_pct = 0.0
+
+if escape_defects and normal_recs:
+    y_true = np.array([1 if os.path.basename(r["Original_Filename"]).startswith("escape_") else 0 for r in records], dtype=np.int32)
+    y_score = np.array([float(r["Max_Score"]) for r in records], dtype=np.float64)
+    n_pos, n_neg = int(np.sum(y_true == 1)), int(np.sum(y_true == 0))
+
+    order = np.argsort(-y_score, kind="mergesort")
+    yt_s, ys_s = y_true[order], y_score[order]
+    ranks = np.zeros(len(ys_s), dtype=np.float64)
+    i, n = 0, len(ys_s)
+    while i < n:
+        j = i + 1
+        while j < n and ys_s[j] == ys_s[i]:
+            j += 1
+        ranks[i:j] = 0.5 * ((n - j + 1) + (n - i))
+        i = j
+    auroc_val = (float(np.sum(ranks[yt_s == 1])) - n_pos * (n_pos + 1) / 2.0) / max(1.0, float(n_pos * n_neg))
+
+    tp_c, fp_c = np.cumsum(yt_s == 1), np.cumsum(yt_s == 0)
+    t_idx = np.r_[np.where(np.diff(ys_s))[0], n - 1]
+    tps, fps = tp_c[t_idx], fp_c[t_idx]
+    precs = tps / np.maximum(1, tps + fps)
+    recs = tps / max(1, n_pos)
+    ap_val = float(np.sum(np.diff(np.r_[0.0, recs]) * precs))
+    f1s = (2.0 * precs * recs) / np.maximum(1e-12, precs + recs)
+    b_i = int(np.argmax(f1s))
+    f1_max_val = float(f1s[b_i])
+    best_th_val = float(ys_s[t_idx[b_i]])
+
+    tp_cur = len(caught_escape)
+    fp_cur = len(fp_normal)
+    prec_pct = (tp_cur / max(1, tp_cur + fp_cur)) * 100.0
+    f1_cur_pct = (2.0 * prec_pct * recall_pct) / max(1e-12, prec_pct + recall_pct)
+
 summary_block = [
-    "=" * 85,
-    f" 🎯 [{unique_tag.upper()} (MuSc-V2) 廠外公開資料集測試總結 — 分數分佈與 Threshold 參考 ({score_mode_str})]",
-    "-" * 85,
+    "=" * 95,
+    f" 🎯 [{unique_tag.upper()} (MuSc-V2) 廠外公開資料集測試總結 — 分數分佈與量化評估指標 ({score_mode_str})]",
+    "-" * 95,
     f"  📂 推論紀錄資料夾             : {os.path.abspath(infer_dir)}",
     f"  📄 最新排名報表位置           : {os.path.abspath(latest_csv)}",
     f"  🖼️ 盲池圖片結構               : 總計 {total} 張 (正常圖: {len(target_normal)} 張 | 隱藏Escape瑕疵: {len(escape_defects)} 張)",
     f"  🎚️ 本次動態對齊後有效門檻      : {eff_thresh:.4f}",
 ]
 if escape_defects:
-    summary_block.append(
-        f"  🎯 抓漏與誤報表現             : 成功抓出瑕疵 {len(caught_escape)}/{len(escape_defects)} 張 (Recall={recall_pct:.1f}%) | 正常圖誤報 {len(fp_normal)}/{len(target_normal)} 張 (FPR={fpr_pct:.1f}%)"
-    )
+    summary_block.extend([
+        f"  🏆 標準量化評估指標 (Metrics) : I-AUROC={auroc_val:.4f} | I-AP={ap_val:.4f} | F1-max={f1_max_val:.4f} (Best_Th={best_th_val:.4f})",
+        f"  🎯 抓漏與誤報表現 (Current)   : Recall={recall_pct:.2f}% ({len(caught_escape)}/{len(escape_defects)}) | FPR={fpr_pct:.2f}% ({len(fp_normal)}/{len(target_normal)}) | Precision={prec_pct:.2f}% | F1={f1_cur_pct:.2f}%",
+    ])
 else:
     summary_block.append(
         f"  🎯 純正常池誤報表現 (FPR)     : 正常圖誤報 {len(fp_normal)}/{len(target_normal)} 張 (FPR={fpr_pct:.2f}%)"
     )
 summary_block.extend([
-    "-" * 85,
+    "-" * 95,
     f"  📊 正常圖分數分佈             : Max={max_s:.4f} | P99={p99_s:.4f} | P95={p95_s:.4f} | Median={median_s:.4f} | Mean={mean_s:.4f} | Std={std_s:.4f}",
     f"  📐 正常圖門檻參考值           : mean+1*std={m1std:.4f} | mean+2*std={m2std:.4f} | mean+3*std={m3std:.4f}",
 ])
@@ -490,7 +527,7 @@ if escape_defects:
     summary_block.append(
         f"  🔍 隱藏 Escape 瑕疵圖分數分佈  : Min={float(np.min(esc_scores)):.4f} | Median={float(np.median(esc_scores)):.4f} | Max={float(np.max(esc_scores)):.4f}"
     )
-summary_block.append("=" * 85 + "\n")
+summary_block.append("=" * 95 + "\n")
 
 full_text = "\n".join(summary_block)
 print("\n" + full_text)
@@ -507,8 +544,13 @@ with open(batch_csv, "a", newline="", encoding="utf-8") as cf:
         len(target_normal),
         len(escape_defects),
         f"{eff_thresh:.4f}",
+        f"{auroc_val:.4f}",
+        f"{ap_val:.4f}",
+        f"{f1_max_val:.4f}",
         f"{recall_pct:.2f}",
         f"{fpr_pct:.2f}",
+        f"{prec_pct:.2f}",
+        f"{f1_cur_pct:.2f}",
         f"{mean_s:.4f}",
         f"{std_s:.4f}",
         os.path.abspath(infer_dir),
