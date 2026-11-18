@@ -1,2 +1,2 @@
 Dataset_Key,Category,Total_Imgs,Normal_Imgs,Escape_Imgs,Eff_Threshold,Recall_Pct,FPR_Pct,Normal_Mean,Normal_Std,Infer_Dir,Report_CSV
-mvtec_2_can,can,80,72,8,0.4159,0.00,1.39,0.3727,0.0150,/home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_2_can_muscv2/20261115_164830,/home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_2_can_muscv2/20261115_164830/escape_ranking_report.csv
+YDFID_2_CL1,CL1,173,165,8,0.1946,100.00,3.03,0.1476,0.0349,/home/kenny/project/muscv2/output/2_fab_no_gt_YDFID_2_CL1_muscv2/20261118_100520,/home/kenny/project/muscv2/output/2_fab_no_gt_YDFID_2_CL1_muscv2/20261118_100520/escape_ranking_report.csv

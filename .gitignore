@@ -1,6 +1,7 @@
 *.png
 *.jpg
 *.jpeg
+*.zip
 
 cat << 'EOF' >> .gitignore
 
@@ -23,6 +24,9 @@ data/*
 *.tgz
 *.zip
 *.7z
+
+datasets/*
+*.json
 
 # === Pretrained Weights & Caches ===
 *.pth

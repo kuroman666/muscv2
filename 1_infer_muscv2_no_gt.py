@@ -25,10 +25,25 @@ from torchvision import transforms
 
 TZ_TAIPEI = timezone(timedelta(hours=8))
 IMG_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
+IGNORE_POOL_DIRS = {"masks", "masks2", "mask", "ground_truth", "gt", "with_gt", "__macosx"}
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
+
+
+def get_available_ram_bytes() -> int:
+    """讀取 Linux 系統目前可用主記憶體 (MemAvailable) 位元組數。"""
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        return int(parts[1]) * 1024
+    except Exception:
+        pass
+    return 32 * (1024 ** 3)
 
 
 def format_duration(seconds: float) -> str:
@@ -77,12 +92,12 @@ def safe_copy(src: str, dst: str):
 
 
 def scan_pool_images(pool_dir: str) -> List[str]:
-    """遞迴搜尋資料夾與所有子資料夾內的圖片，回傳排序後的完整路徑清單。"""
+    """遞迴搜尋資料夾與所有子資料夾內的圖片（自動略過 GT 遮罩資料夾），回傳排序後的完整路徑清單。"""
     if not os.path.isdir(pool_dir):
         return []
     img_paths = []
     for root, dirs, files in os.walk(pool_dir):
-        dirs.sort()
+        dirs[:] = [d for d in sorted(dirs) if d.lower() not in IGNORE_POOL_DIRS]
         for f in sorted(files):
             if f.lower().endswith(IMG_EXTENSIONS) and not f.startswith("."):
                 img_paths.append(os.path.join(root, f))
@@ -175,10 +190,16 @@ def _print_inline_progress(
 def prepare_mock_unlabeled_pool_from_mvtec(
     mvtec_cat_dir: str, mock_pool_dir: str, log_files: List[str], defect_limit: int = 8
 ):
-    """從 MVTec / MVTec-2 建立模擬無 GT 盲池 (clean_<原檔名> 與 escape_<瑕疵類別>_<原檔名>)。"""
+    """從 MVTec / MVTec-2 / Mura 建立模擬無 GT 盲池 (clean_<原檔名> 與 escape_<瑕疵類別>_<原檔名>)。"""
     safe_rmtree(mock_pool_dir)
     os.makedirs(mock_pool_dir, exist_ok=True)
     test_dir = os.path.join(mvtec_cat_dir, "test")
+    if not os.path.isdir(os.path.join(test_dir, "good")) and os.path.isdir(test_dir):
+        for d in sorted(os.listdir(test_dir)):
+            cand = os.path.join(test_dir, d)
+            if os.path.isdir(cand) and os.path.isdir(os.path.join(cand, "good")):
+                test_dir = cand
+                break
 
     total_count = 0
     good_dir = os.path.join(test_dir, "good")
@@ -189,7 +210,7 @@ def prepare_mock_unlabeled_pool_from_mvtec(
 
     defect_count = 0
     for sub in sorted(os.listdir(test_dir)):
-        if sub == "good":
+        if sub == "good" or sub.lower() in IGNORE_POOL_DIRS:
             continue
         sub_dir = os.path.join(test_dir, sub)
         if not os.path.isdir(sub_dir):
@@ -239,6 +260,56 @@ def inspect_image_size_fast(img_path: str) -> Tuple[int, int]:
         return int(img.shape[0]), int(img.shape[1])
 
 
+def estimate_safe_tiling_params(
+    hw_list: List[Tuple[int, int]],
+    tile_size: int,
+    tile_overlap: int,
+    min_tiling_res: int,
+    disable_tiling: bool,
+    log_files: List[str],
+) -> Tuple[int, int]:
+    """
+    主記憶體 RAM 防爆保護器：
+    根據系統可用 RAM 與資料集總圖塊數，自動調整 tile_size（例如 512 -> 1024 -> 1536），
+    確保單層特徵緩衝區不會超過系統可用記憶體而觸發 Cannot allocate memory。
+    """
+    if disable_tiling:
+        return tile_size, tile_overlap
+
+    avail_bytes = get_available_ram_bytes()
+    # 預留安全緩衝，單層 fp16 特徵庫上限設為可用 RAM 的 55% (每個 tile 約 37*37*1024*2 ≈ 2.81 MB)
+    bytes_per_tile = 37 * 37 * 1024 * 2
+    max_safe_tiles = max(2000, int((avail_bytes * 0.55) / bytes_per_tile))
+
+    overlap_ratio = tile_overlap / max(1.0, float(tile_size))
+    cur_ts = tile_size
+    cur_ov = tile_overlap
+
+    while cur_ts < 2048:
+        stride = max(1, cur_ts - cur_ov)
+        est_tiles = 0
+        for (h, w) in hw_list:
+            if max(h, w) >= min_tiling_res and (h > cur_ts or w > cur_ts):
+                est_tiles += len(get_axis_positions(h, cur_ts, stride)) * len(get_axis_positions(w, cur_ts, stride))
+            else:
+                est_tiles += 1
+
+        if est_tiles <= max_safe_tiles:
+            break
+
+        next_ts = cur_ts * 2
+        next_ov = int(round(next_ts * overlap_ratio))
+        log_and_print(
+            f"[🛡️ 記憶體防爆自動調節] 預估切塊數 ({est_tiles} 塊) 接近可用 RAM 上限 "
+            f"(Avail={avail_bytes / (1024**3):.1f} GiB, 安全上限≈{max_safe_tiles} 塊)，"
+            f"自動將切塊尺寸從 {cur_ts}x{cur_ts} 升級為 {next_ts}x{next_ts} (Overlap={next_ov})！",
+            log_files,
+        )
+        cur_ts, cur_ov = next_ts, next_ov
+
+    return cur_ts, cur_ov
+
+
 def prepare_tiled_test_pool(
     pool_dir: str,
     tiled_pool_dir: str,
@@ -255,17 +326,26 @@ def prepare_tiled_test_pool(
 ) -> Dict:
     """
     遞迴搜尋測試盲池中的所有圖片，並執行「大圖防呆判定」：
-    - 僅當圖片長邊 >= min_tiling_res (預設 1536) 時才執行 512x512 (cover 12.5%) 切塊；
+    - 僅當圖片長邊 >= min_tiling_res (預設 1536) 時才執行切塊；
     - 若圖片長邊 < min_tiling_res (例如 MVTec 700~1024px)，自動跳過切塊直接以整張原圖推論。
     """
     safe_rmtree(tiled_pool_dir)
 
-    stride = max(1, tile_size - tile_overlap)
     img_paths = scan_pool_images(pool_dir)
     if not img_paths:
         raise FileNotFoundError(f"在 {pool_dir} (含子資料夾) 中找不到任何圖片！")
 
     hw_list = [inspect_image_size_fast(p) for p in img_paths]
+    tile_size, tile_overlap = estimate_safe_tiling_params(
+        hw_list=hw_list,
+        tile_size=tile_size,
+        tile_overlap=tile_overlap,
+        min_tiling_res=min_tiling_res,
+        disable_tiling=disable_tiling,
+        log_files=log_files,
+    )
+    stride = max(1, tile_size - tile_overlap)
+
     max_sides = [max(h, w) for (h, w) in hw_list]
     med_res = int(np.median(max_sides))
     max_res = int(np.max(max_sides))
@@ -623,12 +703,7 @@ def run_muscv2_zero_shot_inference(
     max_peer_tiles: int,
     log_files: List[str],
 ):
-    """
-    執行完整 MuSc-V2 Training-Free & Zero-Shot 互評推論管線（單層串流防爆記憶體架構）：
-    - 預先分配固定形狀的單層特徵緩衝區 (total_tiles, num_patches, embed_dim)，零 torch.cat 記憶體複製；
-    - 逐層提取 -> 該層多尺度 (r_list) MSM 互評累加 -> 立即覆寫/釋放緩衝區，
-      使 Host RAM 佔用維持在 ~3.2 GB、GPU VRAM < 5 GB，徹底杜絕 Linux OOM Killer！
-    """
+    """執行完整 MuSc-V2 Training-Free & Zero-Shot 互評推論管線（單層串流防爆記憶體架構）。"""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, embed_dim, patch_size, img_input_size, default_layers = load_muscv2_vision_backbone(
         backbone_name=backbone_name,
@@ -672,7 +747,6 @@ def run_muscv2_zero_shot_inference(
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
-    # 預先配置單層特徵緩衝區 (只佔 1 層空間，無 torch.cat 翻倍複製)
     storage_device = device if (device.type == "cuda" and total_tiles <= 350) else torch.device("cpu")
     layer_raw_buf = torch.empty((total_tiles, num_patches, embed_dim), dtype=torch.float16, device=storage_device)
     global_feats_accum = torch.zeros((total_tiles, embed_dim), dtype=torch.float32, device="cpu")
@@ -685,7 +759,6 @@ def run_muscv2_zero_shot_inference(
     t_total_infer_start = time.perf_counter()
 
     for layer_step, l_idx in enumerate(use_layers, 1):
-        # 1. 掛載單層 Hook 提取該層原始 Patch 特徵填入預分配緩衝區
         hook_holder = {}
 
         def _hook(_mod, _inp, out):
@@ -707,7 +780,7 @@ def run_muscv2_zero_shot_inference(
                 _ = model(x_batch)
 
             tok = hook_holder["feat"].float()
-            patch_tok = tok[:, -num_patches:, :]  # (B, P, C)
+            patch_tok = tok[:, -num_patches:, :]
             g_batch = F.normalize(patch_tok.mean(dim=1), dim=-1).cpu()
             global_feats_accum[start_i:end_i] += g_batch / float(num_layers_to_run)
 
@@ -728,29 +801,33 @@ def run_muscv2_zero_shot_inference(
         if device.type == "cuda":
             torch.cuda.empty_cache()
 
-        # 2. 針對該層依序執行多尺度聚合 (r_list) 與 MSM 跨圖塊互評
         for r_step, r in enumerate(r_list, 1):
             combo_idx = (layer_step - 1) * len(r_list) + r_step
             t_msm_step = time.perf_counter()
 
+            # 依 GPU 剩餘顯存動態決定特徵庫駐留位置 (超過 1200 塊一律駐留 CPU RAM，避免 20GB+ VRAM OOM)
+            bank_dev = device if (device.type == "cuda" and total_tiles <= 1200) else torch.device("cpu")
+            bank_host = torch.empty((total_tiles, num_patches, embed_dim), dtype=torch.float16, device=bank_dev)
+
             if r == 1:
-                bank_on_dev = F.normalize(layer_raw_buf.to(device).float(), dim=-1).half()
+                for b_s in range(0, total_tiles, 128):
+                    b_e = min(total_tiles, b_s + 128)
+                    normed = F.normalize(layer_raw_buf[b_s:b_e].to(device).float(), dim=-1).half()
+                    bank_host[b_s:b_e].copy_(normed)
+                    del normed
             else:
-                # 分批進行 2D 平均池化，避免瞬間建立大型 4D fp32 副本
-                bank_on_dev = torch.empty((total_tiles, num_patches, embed_dim), dtype=torch.float16, device=device)
                 for b_s in range(0, total_tiles, 64):
                     b_e = min(total_tiles, b_s + 64)
                     sub_2d = layer_raw_buf[b_s:b_e].to(device).float().transpose(1, 2).reshape(b_e - b_s, embed_dim, grid_hw, grid_hw)
                     agg_2d = F.avg_pool2d(sub_2d, kernel_size=r, stride=1, padding=r // 2)
                     agg_flat = agg_2d.flatten(2).transpose(1, 2)
-                    bank_on_dev[b_s:b_e] = F.normalize(agg_flat, dim=-1).half()
-                    del sub_2d, agg_2d, agg_flat
-
-            bank_t = bank_on_dev.transpose(1, 2).contiguous()  # (N, C, P)
+                    normed = F.normalize(agg_flat, dim=-1).half()
+                    bank_host[b_s:b_e].copy_(normed)
+                    del sub_2d, agg_2d, agg_flat, normed
 
             for q_start in range(0, total_tiles, msm_chunk_size):
                 q_end = min(total_tiles, q_start + msm_chunk_size)
-                q_feat = bank_on_dev[q_start:q_end]  # (B_q, P, C)
+                q_feat = bank_host[q_start:q_end].to(device)
                 b_q = q_end - q_start
 
                 q_parents = parent_ids_tensor[q_start:q_end].unsqueeze(1)
@@ -762,10 +839,10 @@ def run_muscv2_zero_shot_inference(
 
                 if max_peer_tiles > 0 and total_tiles > max_peer_tiles:
                     peer_indices = torch.randperm(total_tiles)[:max_peer_tiles]
-                    sub_bank_t = bank_t[peer_indices]
+                    sub_bank_t = bank_host[peer_indices].to(device).transpose(1, 2).contiguous()
                     sub_mask = valid_peer_mask[:, peer_indices].to(device)
                 else:
-                    sub_bank_t = bank_t
+                    sub_bank_t = bank_host.to(device).transpose(1, 2).contiguous()
                     sub_mask = valid_peer_mask.to(device)
 
                 sim = torch.einsum("qic,mcj->qmij", q_feat, sub_bank_t)
@@ -788,7 +865,7 @@ def run_muscv2_zero_shot_inference(
 
                 del min_dist_per_peer, sorted_dists
 
-            del bank_on_dev, bank_t
+            del bank_host
             if device.type == "cuda":
                 torch.cuda.empty_cache()
 
@@ -803,7 +880,6 @@ def run_muscv2_zero_shot_inference(
     del layer_raw_buf
     gc.collect()
 
-    # 階段 C: RsCon 全域外觀鄰域重評校準
     global_feats_all = F.normalize(global_feats_accum, dim=-1)
     raw_tile_max = patch_scores_accum.max(dim=1).values
     rscon_scale = torch.ones(total_tiles, dtype=torch.float32)

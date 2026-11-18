@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # 檔案位置: MuSc-V2/run_outside_muscv2.sh
-# 用途: MuSc-V2 廠外公開資料集 (MVTec AD / MVTec AD 2) Training-Free & Zero-Shot 無 GT 模擬抓漏與拆分評估腳本 (含自動 RAM/VRAM 背景監控)
-# 執行期間若想即時偷看資源變化，可隨時執行 tail -f output/latest_mem_monitor.log（廠外）
+# 用途: MuSc-V2 廠外公開資料集 (MVTec AD / MVTec AD 2 / Mura / AVMap / YDFID-2) Training-Free & Zero-Shot 無 GT 模擬抓漏與拆分評估腳本
+# 1. 測試 YDFID-2 單一類別（預設 CL1）： bash run_outside_muscv2.sh
+# 2. 測試 YDFID-2 全部 19 個類別： bash run_outside_muscv2.sh ./data/YDFID-2
+#                               nohup ./run_outside_muscv2.sh ./data/YDFID-2 > outside_test_YDFID-2.txt 2>&1 &
+#                               接著用正確檔名即時查看進度：tail -f outside_test_YDFID-2.txt
+# 3. 跑舊資料集（MVTec / MVTec-2 / Mura / AVMap）（完全相容）： bash run_outside_muscv2.sh ./data/mvtec/capsule ./data/Mura2_wo_bg_w_pb
 set -e
 
 # ===================== [可自由修改的參數區] =====================
@@ -15,13 +19,16 @@ if [ $# -ge 1 ]; then
     TARGET_CAT_DIRS=("$@")
 else
     TARGET_CAT_DIRS=(
+        # --- 舊資料集範例 (完全相容) ---
         # "${DATASETS_DIR}/mvtec/capsule"
-        "${DATASETS_DIR}/mvtec-2/can"
-        # "${DATASETS_DIR}/mvtec/bottle"
-        # "${DATASETS_DIR}/mvtec/cable"
-        # "${DATASETS_DIR}/mvtec/grid"
-        # "${DATASETS_DIR}/mvtec/tile"
-        # "${DATASETS_DIR}/mvtec/transistor"
+        # "${DATASETS_DIR}/mvtec-2/can"
+        # "${DATASETS_DIR}/mini_AVMap2"
+        # "${DATASETS_DIR}/Mura2_wo_bg_w_pb"
+        # "${DATASETS_DIR}/Mura2_bg_mask"
+
+        # --- 新資料集 YDFID-2 (可指定單一類別，或直接填入 YDFID-2 自動掃描全部 19 個類別) ---
+        "${DATASETS_DIR}/YDFID-2/CL1"
+        # "${DATASETS_DIR}/YDFID-2"
     )
 fi
 
@@ -55,7 +62,7 @@ SPECKLE_FILTER_RATIO=0.008
 MIN_AREA_RATIO=0.00012
 
 # --- 智慧解析度防呆切塊與縫合參數 ---
-MIN_TILING_RES=1536                   # 大圖防呆門檻：僅當長邊 >= 1536px 才切塊；廠外公開集 (700~1024px) 自動整張推論
+MIN_TILING_RES=1536                   # 大圖防呆門檻：僅當長邊 >= 1536px 才切塊；中低解析度公開集自動整張推論
 TILE_SIZE=512
 TILE_OVERLAP=64
 INFER_BATCH_SIZE=16
@@ -109,7 +116,7 @@ cleanup_mem_monitor() {
     fi
     if [ -f "${MEM_MONITOR_LOG}" ]; then
         cp -f "${MEM_MONITOR_LOG}" "${MEM_MONITOR_LATEST}"
-        python - "${MEM_MONITOR_LOG}" << 'EOF'
+        python - "${MEM_MONITOR_LOG}" << 'PYEOF'
 import re, sys
 log_p = sys.argv[1]
 ram_used, ram_avail, vram_used = [], [], []
@@ -130,7 +137,7 @@ if ram_used or vram_used:
         print(f"   ├─ 系統 RAM 最高已用 : {max(ram_used)} MiB ({max(ram_used)/1024:.2f} GiB) | 最低剩餘可用 (Min Avail): {min(ram_avail)} MiB ({min(ram_avail)/1024:.2f} GiB)")
     if vram_used:
         print(f"   └─ GPU VRAM 最高峰值 : {max(vram_used)} / {vram_tot} MiB ({max(vram_used)/1024:.2f} GiB, {max(vram_used)/max(1,vram_tot)*100:.1f}%)")
-EOF
+PYEOF
     fi
 }
 
@@ -149,13 +156,17 @@ prepare_public_sim_pool() {
     local LIMIT="$4"
     local FORCE_REBUILD="$5"
 
-    python - "${SRC_CAT_DIR}" "${DST_POOL_DIR}" "${MODE}" "${LIMIT}" "${FORCE_REBUILD}" << 'EOF'
+    python - "${SRC_CAT_DIR}" "${DST_POOL_DIR}" "${MODE}" "${LIMIT}" "${FORCE_REBUILD}" << 'PYEOF'
 import os
 import sys
 import stat
 import shutil
 
 IMG_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
+# 支援舊資料集 (good / ok / normal) 與新資料集 YDFID-2 (defect-free)
+GOOD_FOLDER_NAMES = {"good", "defect-free", "defect_free", "ok", "normal"}
+IGNORE_DIRS = {"masks", "masks2", "mask", "ground_truth", "groundtruth", "gt", "with_gt", "__macosx"}
+
 src_cat_dir, dst_pool_dir, mode, defect_limit, force_rebuild = (
     sys.argv[1],
     sys.argv[2],
@@ -170,16 +181,46 @@ if os.path.isdir(dst_pool_dir) and not force_rebuild:
         print(f"[⚡ 模擬無GT盲池快取命中] 直接沿用既有 {len(existing)} 張盲池圖片 -> {os.path.abspath(dst_pool_dir)}")
         sys.exit(0)
 
+def find_good_subdir(parent_dir):
+    if not os.path.isdir(parent_dir):
+        return None
+    for d in sorted(os.listdir(parent_dir)):
+        if d.lower() in GOOD_FOLDER_NAMES and os.path.isdir(os.path.join(parent_dir, d)):
+            return os.path.join(parent_dir, d)
+    return None
+
+# 自動相容：
+# 1) MVTec / MVTec-2: <src>/test/good/
+# 2) YDFID-2: <src>/test/defect-free/ 與 <src>/test/defect/
+# 3) Mura / AVMap: <src>/test/<sub_cat>/good/
 test_dir = None
+good_dir = None
 for cand in ["test", "test_public", "val", "validation"]:
     cand_path = os.path.join(src_cat_dir, cand)
-    if os.path.isdir(cand_path) and os.path.isdir(os.path.join(cand_path, "good")):
+    if not os.path.isdir(cand_path):
+        continue
+    g = find_good_subdir(cand_path)
+    if g is not None:
         test_dir = cand_path
+        good_dir = g
+        break
+    sub_entries = [
+        os.path.join(cand_path, d)
+        for d in sorted(os.listdir(cand_path))
+        if os.path.isdir(os.path.join(cand_path, d)) and d.lower() not in IGNORE_DIRS
+    ]
+    for sub_p in sub_entries:
+        g2 = find_good_subdir(sub_p)
+        if g2 is not None:
+            test_dir = sub_p
+            good_dir = g2
+            break
+    if test_dir is not None:
         break
 
-if test_dir is None:
+if test_dir is None or good_dir is None:
     raise FileNotFoundError(
-        f"在 {src_cat_dir} 下找不到包含 good/ 的測試資料夾 (已檢查 test, test_public, validation)！"
+        f"在 {src_cat_dir} 下找不到包含 good/ 或 defect-free/ 的測試資料夾！"
     )
 
 if os.path.exists(dst_pool_dir):
@@ -193,18 +234,24 @@ def copy_unlocked(src, dst):
     except OSError:
         pass
 
-good_dir = os.path.join(test_dir, "good")
 good_count = 0
-for root, _, files in os.walk(good_dir):
+for root, dirs, files in os.walk(good_dir):
+    dirs[:] = [d for d in sorted(dirs) if d.lower() not in IGNORE_DIRS]
     for f in sorted(files):
         if f.lower().endswith(IMG_EXTS) and not f.startswith("."):
             copy_unlocked(os.path.join(root, f), os.path.join(dst_pool_dir, f"clean_{f}"))
             good_count += 1
 
+# 若 test 正常樣本少於 8 張，自動從 train/good 或 train/defect-free 補充正常樣本
 if good_count < 8:
-    for backup_sub in ["validation/good", "train/good"]:
-        b_dir = os.path.join(src_cat_dir, backup_sub)
-        if os.path.isdir(b_dir):
+    rel_sub = os.path.relpath(test_dir, src_cat_dir)
+    sub_cat_name = os.path.basename(test_dir) if os.path.dirname(rel_sub) else ""
+    backup_parents = ["validation", "train"]
+    if sub_cat_name:
+        backup_parents = [f"validation/{sub_cat_name}", f"train/{sub_cat_name}"] + backup_parents
+    for bp in backup_parents:
+        b_dir = find_good_subdir(os.path.join(src_cat_dir, bp))
+        if b_dir and os.path.isdir(b_dir):
             for f in sorted(os.listdir(b_dir)):
                 if f.lower().endswith(IMG_EXTS) and not f.startswith("."):
                     dst_f = os.path.join(dst_pool_dir, f"clean_val_{f}")
@@ -219,12 +266,13 @@ if good_count < 8:
 defect_count = 0
 if mode == "escape" and defect_limit > 0:
     for sub in sorted(os.listdir(test_dir)):
-        if sub == "good":
+        if sub.lower() in GOOD_FOLDER_NAMES or sub.lower() in IGNORE_DIRS:
             continue
         sub_dir = os.path.join(test_dir, sub)
         if not os.path.isdir(sub_dir):
             continue
-        for root, _, files in os.walk(sub_dir):
+        for root, dirs, files in os.walk(sub_dir):
+            dirs[:] = [d for d in sorted(dirs) if d.lower() not in IGNORE_DIRS]
             for f in sorted(files):
                 if f.lower().endswith(IMG_EXTS) and not f.startswith(".") and defect_count < defect_limit:
                     copy_unlocked(os.path.join(root, f), os.path.join(dst_pool_dir, f"escape_{sub}_{f}"))
@@ -234,7 +282,7 @@ print(
     f"[✓ 模擬無GT盲池建立完成] 來源: {test_dir} | 模式: {mode} | "
     f"共 {good_count + defect_count} 張圖 (正常: {good_count} 張, 隱藏瑕疵: {defect_count} 張) -> {os.path.abspath(dst_pool_dir)}"
 )
-EOF
+PYEOF
 }
 
 run_single_public_category() {
@@ -343,7 +391,7 @@ run_single_public_category() {
             ${RECOMPUTE_PACK_THRESH} ${USE_SYMLINK}
     fi
 
-    python - "${SAVE_BASE_DIR}" "${CAT_NAME}" "${UNIQUE_TAG}" "${BATCH_SUMMARY_TXT}" "${BATCH_SUMMARY_CSV}" << 'EOF'
+    python - "${SAVE_BASE_DIR}" "${CAT_NAME}" "${UNIQUE_TAG}" "${BATCH_SUMMARY_TXT}" "${BATCH_SUMMARY_CSV}" << 'PYEOF'
 import os
 import sys
 import re
@@ -466,17 +514,35 @@ with open(batch_csv, "a", newline="", encoding="utf-8") as cf:
         os.path.abspath(infer_dir),
         os.path.abspath(latest_csv),
     ])
-EOF
+PYEOF
 }
 
-for cat_path in "${TARGET_CAT_DIRS[@]}"; do
+# 展開目標清單：若傳入的是整個資料集根目錄 (例如 ./data/YDFID-2 或 ./data/mvtec)，自動展開底下所有類別
+EXPANDED_CAT_DIRS=()
+for entry_path in "${TARGET_CAT_DIRS[@]}"; do
+    if [ ! -d "${entry_path}" ]; then
+        echo "❌ [路徑錯誤] 找不到資料夾: ${entry_path}"
+        exit 1
+    fi
+    if [ -d "${entry_path}/test" ] || [ -d "${entry_path}/test_public" ] || [ -d "${entry_path}/validation" ]; then
+        EXPANDED_CAT_DIRS+=("${entry_path}")
+    else
+        for sub_cat in $(find "${entry_path}" -mindepth 1 -maxdepth 1 -type d | sort); do
+            if [ -d "${sub_cat}/test" ] || [ -d "${sub_cat}/test_public" ] || [ -d "${sub_cat}/validation" ]; then
+                EXPANDED_CAT_DIRS+=("${sub_cat}")
+            fi
+        done
+    fi
+done
+
+for cat_path in "${EXPANDED_CAT_DIRS[@]}"; do
     run_single_public_category "${cat_path}"
 done
 
 cp -f "${BATCH_SUMMARY_TXT}" "${BATCH_SUMMARY_LATEST}"
 echo ""
 echo "=========================================================================================================="
-echo " ✅ 全部 ${#TARGET_CAT_DIRS[@]} 個資料集 (MuSc-V2 Zero-Shot) 執行完畢！所有紀錄皆已獨立保存："
+echo " ✅ 全部 ${#EXPANDED_CAT_DIRS[@]} 個類別 (MuSc-V2 Zero-Shot) 執行完畢！所有紀錄皆已獨立保存："
 echo "    📄 本次多資料集完整彙整報表 (TXT) : ${BATCH_SUMMARY_TXT}"
 echo "    📄 最新多資料集完整彙整報表 (TXT) : ${BATCH_SUMMARY_LATEST}"
 echo "    📊 最新多資料集完整彙整報表 (CSV) : ${BATCH_SUMMARY_CSV}"
