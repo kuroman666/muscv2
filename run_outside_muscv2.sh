@@ -3,8 +3,8 @@
 # 用途: MuSc-V2 廠外公開資料集 (MVTec AD / MVTec AD 2 / Mura / AVMap / YDFID-2) Training-Free & Zero-Shot 無 GT 模擬抓漏與拆分評估腳本
 # 1. 測試 YDFID-2 單一類別（預設 CL1）： bash run_outside_muscv2.sh
 # 2. 測試 YDFID-2 全部 19 個類別： bash run_outside_muscv2.sh ./data/YDFID-2
-#                               nohup ./run_outside_muscv2.sh ./data/YDFID-2 > outside_test_YDFID-2.txt 2>&1 &
-#                               接著用正確檔名即時查看進度：tail -f outside_test_YDFID-2.txt
+#                               nohup ./run_outside_muscv2.sh ./data/YDFID-2 > outside_test_YDFID-2.log 2>&1 &
+#                               接著用正確檔名即時查看進度：tail -f outside_test_YDFID-2.log
 # 3. 跑舊資料集（MVTec / MVTec-2 / Mura / AVMap）（完全相容）： bash run_outside_muscv2.sh ./data/mvtec/capsule ./data/Mura2_wo_bg_w_pb
 set -e
 
@@ -20,15 +20,20 @@ if [ $# -ge 1 ]; then
 else
     TARGET_CAT_DIRS=(
         # --- 舊資料集範例 (完全相容) ---
-        # "${DATASETS_DIR}/mvtec/capsule"
-        # "${DATASETS_DIR}/mvtec-2/can"
+        "${DATASETS_DIR}/mvtec/bottle"
+        "${DATASETS_DIR}/mvtec/cable"
+        "${DATASETS_DIR}/mvtec/capsule"
+        "${DATASETS_DIR}/mvtec/grid"
+        "${DATASETS_DIR}/mvtec/tile"
+        "${DATASETS_DIR}/mvtec/transistor"
+        "${DATASETS_DIR}/mvtec-2/can"
         # "${DATASETS_DIR}/mini_AVMap2"
         # "${DATASETS_DIR}/Mura2_wo_bg_w_pb"
         # "${DATASETS_DIR}/Mura2_bg_mask"
 
         # --- 新資料集 YDFID-2 (可指定單一類別，或直接填入 YDFID-2 自動掃描全部 19 個類別) ---
         #"${DATASETS_DIR}/YDFID-2/CL1"
-        "${DATASETS_DIR}/YDFID-2"
+        # "${DATASETS_DIR}/YDFID-2"
     )
 fi
 

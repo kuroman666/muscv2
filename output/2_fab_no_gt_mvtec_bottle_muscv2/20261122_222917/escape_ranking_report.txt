@@ -1,0 +1,73 @@
+=== MuSc-V2 High-Res Zero-Shot Anomaly Detection Report (Training-Free) ===
+Score Mode: FILTERED_ROBUST | Threshold Mode: auto | Effective Threshold: 0.1706 | Stitch Canvas: 降維畫布 <= 1024px | Wafer Edge Mode: auto (Margin: 0.040)
+Core Box Ratio: 0.55 | Exported Anomaly Images: 9 | Skipped Normal Images: 19
+Benchmark Metrics (No-GT Sim) : I-AUROC=1.0000 | I-AP=1.0000 | F1-max=1.0000 (Best_Th=0.2857)
+Current Threshold Performance : Recall=100.00% (8/8) | FPR=5.00% (1/20) | Precision=88.89% | F1=94.12%
+Non-Golden Normal Score Dist: Max=0.1772 | P99=0.1751 | P95=0.1667 | Median=0.1353 | Mean=0.1368 | Std=0.0151
+Ablation Compare (Normal)   : Raw_Max=0.1786, Raw_Mean=0.1389 vs Filtered_Max=0.1772, Filtered_Mean=0.1368
+Threshold Ref (Mean+k*Std)  : mean+1*std=0.1519 | mean+2*std=0.1671 | mean+3*std=0.1822
+Overfit Diagnostic          : 🟢 Training-Free Zero-Shot (No Training Overfit)
+-------------------------------------------------------------------------------------------------------------------------------------------------
+Rank  | Original_Filename          | Status              | Max_Score | Raw_Score | Filt_Score | Delta    | BBoxes | Saved_Anomaly_Filename
+-------------------------------------------------------------------------------------------------------------------------------------------------
+1     | escape_broken_large_004.png | ANOMALY             | 0.4119    | 0.4137    | 0.4119     | -0.0018  | 1      | Rank001_Score0.4119_Box01_escape_broken_large_004.png
+2     | escape_broken_large_006.png | ANOMALY             | 0.3291    | 0.3304    | 0.3291     | -0.0013  | 1      | Rank002_Score0.3291_Box01_escape_broken_large_006.png
+3     | escape_broken_large_003.png | ANOMALY             | 0.3212    | 0.3216    | 0.3212     | -0.0004  | 1      | Rank003_Score0.3212_Box01_escape_broken_large_003.png
+4     | escape_broken_large_000.png | ANOMALY             | 0.3167    | 0.3177    | 0.3167     | -0.0010  | 1      | Rank004_Score0.3167_Box01_escape_broken_large_000.png
+5     | escape_broken_large_001.png | ANOMALY             | 0.3105    | 0.3118    | 0.3105     | -0.0013  | 1      | Rank005_Score0.3105_Box01_escape_broken_large_001.png
+6     | escape_broken_large_007.png | ANOMALY             | 0.2923    | 0.2937    | 0.2923     | -0.0013  | 1      | Rank006_Score0.2923_Box01_escape_broken_large_007.png
+7     | escape_broken_large_005.png | ANOMALY             | 0.2875    | 0.2887    | 0.2875     | -0.0012  | 1      | Rank007_Score0.2875_Box01_escape_broken_large_005.png
+8     | escape_broken_large_002.png | ANOMALY             | 0.2857    | 0.2861    | 0.2857     | -0.0004  | 1      | Rank008_Score0.2857_Box01_escape_broken_large_002.png
+9     | clean_006.png              | ANOMALY             | 0.1772    | 0.1786    | 0.1772     | -0.0013  | 1      | Rank009_Score0.1772_Box01_clean_006.png
+10    | clean_001.png              | PASS_SKIPPED        | 0.1661    | 0.1693    | 0.1661     | -0.0032  | 0      | (未超過動態門檻，不輸出圖片)
+11    | clean_016.png              | PASS_SKIPPED        | 0.1559    | 0.1590    | 0.1559     | -0.0031  | 0      | (未超過動態門檻，不輸出圖片)
+12    | clean_015.png              | PASS_SKIPPED        | 0.1459    | 0.1481    | 0.1459     | -0.0022  | 0      | (未超過動態門檻，不輸出圖片)
+13    | clean_009.png              | PASS_SKIPPED        | 0.1407    | 0.1419    | 0.1407     | -0.0012  | 0      | (未超過動態門檻，不輸出圖片)
+14    | clean_013.png              | PASS_SKIPPED        | 0.1402    | 0.1421    | 0.1402     | -0.0019  | 0      | (未超過動態門檻，不輸出圖片)
+15    | clean_010.png              | PASS_SKIPPED        | 0.1390    | 0.1397    | 0.1390     | -0.0007  | 0      | (未超過動態門檻，不輸出圖片)
+16    | clean_000.png              | PASS_SKIPPED        | 0.1389    | 0.1406    | 0.1389     | -0.0017  | 0      | (未超過動態門檻，不輸出圖片)
+17    | clean_014.png              | PASS_SKIPPED        | 0.1374    | 0.1387    | 0.1374     | -0.0013  | 0      | (未超過動態門檻，不輸出圖片)
+18    | clean_018.png              | PASS_SKIPPED        | 0.1356    | 0.1385    | 0.1356     | -0.0029  | 0      | (未超過動態門檻，不輸出圖片)
+19    | clean_017.png              | PASS_SKIPPED        | 0.1351    | 0.1383    | 0.1351     | -0.0032  | 0      | (未超過動態門檻，不輸出圖片)
+20    | clean_007.png              | PASS_SKIPPED        | 0.1332    | 0.1354    | 0.1332     | -0.0022  | 0      | (未超過動態門檻，不輸出圖片)
+21    | clean_008.png              | PASS_SKIPPED        | 0.1308    | 0.1329    | 0.1308     | -0.0020  | 0      | (未超過動態門檻，不輸出圖片)
+22    | clean_002.png              | PASS_SKIPPED        | 0.1290    | 0.1314    | 0.1290     | -0.0024  | 0      | (未超過動態門檻，不輸出圖片)
+23    | clean_019.png              | PASS_SKIPPED        | 0.1281    | 0.1298    | 0.1281     | -0.0017  | 0      | (未超過動態門檻，不輸出圖片)
+24    | clean_005.png              | PASS_SKIPPED        | 0.1241    | 0.1265    | 0.1241     | -0.0024  | 0      | (未超過動態門檻，不輸出圖片)
+25    | clean_003.png              | PASS_SKIPPED        | 0.1237    | 0.1257    | 0.1237     | -0.0020  | 0      | (未超過動態門檻，不輸出圖片)
+26    | clean_012.png              | PASS_SKIPPED        | 0.1218    | 0.1234    | 0.1218     | -0.0016  | 0      | (未超過動態門檻，不輸出圖片)
+27    | clean_004.png              | PASS_SKIPPED        | 0.1214    | 0.1237    | 0.1214     | -0.0022  | 0      | (未超過動態門檻，不輸出圖片)
+28    | clean_011.png              | PASS_SKIPPED        | 0.1121    | 0.1141    | 0.1121     | -0.0019  | 0      | (未超過動態門檻，不輸出圖片)
+
+
+===========================================================================
+ [✅ MuSc-V2 推論完成 — 整體時間與所有檔案儲存位置總覽]
+---------------------------------------------------------------------------
+  [1] 整體推論階段總時間 (Total Inference Time) : 00:00:09.88 (9.88 秒)
+      ├─ Step 1 解析度防呆檢查 (28 張全圖)                : 00:00:00.00 (0.00 秒) (Cached)
+      ├─ Step 2 MuSc-V2 Zero-Shot 互評推理 (BS=16) : 00:00:08.38 (8.38 秒)
+      ├─ Step 3 RAM 縫合銷毀碎片與防誤報濾波畫框 (Canvas<=1024px) : 00:00:01.50 (1.50 秒)
+      └─ 平均每張原圖推論耗時 (28 張原圖)         : 0.35 秒/張
+---------------------------------------------------------------------------
+  [2] 任務全程總執行時間 (Total Wall Time)      : 00:00:09.88 (9.88 秒)
+---------------------------------------------------------------------------
+  [3] 門檻篩選統計與分數分佈 (Score=FILTERED, Mode=auto, Eff_Thresh=0.1706):
+      🚨 超過門檻判定異常並畫框輸出 : 9 張
+      ✅ 未達門檻或微塵濾除直接略過 : 19 張 (不輸出圖片)
+      🏆 模擬盲池量化指標 (Eval)     : I-AUROC=1.0000 | I-AP=1.0000 | F1-max=1.0000 (@0.2857)
+      🎯 當前門檻實測表現 (Current)    : Recall=100.00% (8/8) | FPR=5.00% (1/20) | Precision=88.89% | F1=94.12%
+      📊 正常圖分數分佈 (防誤報濾波後) : Max=0.1772 | P99=0.1751 | P95=0.1667 | Median=0.1353 | Mean=0.1368 | Std=0.0151
+      📐 正常圖門檻參考值              : mean+1*std=0.1519 | mean+2*std=0.1671 | mean+3*std=0.1822
+      🔬 濾波前後正常圖對照 (Ablation) : [未濾波 Raw] Max=0.1786, Mean=0.1389, Std=0.0152 vs [防誤報濾波] Max=0.1772, Mean=0.1368, Std=0.0151
+      🩺 模型過擬合自檢 (Overfit)      : 🟢 Zero-Shot Training-Free (無參數訓練，天生 0 過擬合風險)
+---------------------------------------------------------------------------
+  [4] 本次推論結果儲存資料夾清單 (Saved Directories & Files):
+      🧹 子圖塊碎片 Tile .npy 狀態  : 已於 RAM 拼接完成後立即自動銷毀 (0 殘留)
+      📂 本次時間戳記推論主資料夾   : /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_bottle_muscv2/20261122_222917
+          ├── 異常紅框三合一對照圖  : /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_bottle_muscv2/20261122_222917/anomaly_images
+          ├── 異常1:1全解析度紅框圖 : /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_bottle_muscv2/20261122_222917/anomaly_images/full_res_bbox_only
+          ├── 異常熱力圖矩陣(.npy)  : /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_bottle_muscv2/20261122_222917/amap_npy
+          ├── 完整排名報表 (TXT)    : /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_bottle_muscv2/20261122_222917/escape_ranking_report.txt
+          ├── 完整排名報表 (CSV)    : /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_bottle_muscv2/20261122_222917/escape_ranking_report.csv
+          └── 本次執行日誌 (log.txt): /home/kenny/project/muscv2/output/2_fab_no_gt_mvtec_bottle_muscv2/20261122_222917/log.txt
+===========================================================================
