@@ -59,12 +59,12 @@ DISABLE_TILING=""                     # 若想強制關閉切塊退回整張模�
 
 # --- 動態門檻與四合一防誤報超參數 ---
 if [ "${CUSTOM_THRESH_PASSED}" -eq 1 ]; then
-  THRESH_MODE="fixed"
+  THRESH_MODE="auto"
 else
-  THRESH_MODE="${THRESH_MODE:-hybrid}" # 未指定固定數值時預設使用 hybrid 動態門檻 (亦可改為 fixed / mean_std / percentile)
+  THRESH_MODE="${THRESH_MODE:-auto}" # 未指定固定數值時預設使用 hybrid 動態門檻 (亦可改為 fixed / mean_std / percentile)
 fi
 SIGMA_K=3.5
-THRESHOLD="${THRESHOLD:-0}"
+THRESHOLD="${THRESHOLD:-0.0}"
 MIN_THRESHOLD="${MIN_THRESHOLD:-0}"
 AUTO_PERCENTILE=95.0
 TOP_K=0
@@ -316,6 +316,29 @@ p95_s = float(np.percentile(norm_scores, 95))
 median_s = float(np.median(norm_scores))
 mean_s = float(np.mean(norm_scores))
 std_s = float(np.std(norm_scores))
+_all_eval_scores = np.array([float(r["Max_Score"]) for r in records], dtype=np.float64)
+_mean_all = float(np.mean(_all_eval_scores))
+_std_all = float(np.std(_all_eval_scores))
+_th_3sigma = _mean_all + 3.0 * _std_all
+_med_all = float(np.median(_all_eval_scores))
+_mad_all = float(np.median(np.abs(_all_eval_scores - _med_all)))
+_th_modz = _med_all + (3.5 / 0.6745) * _mad_all
+if _th_3sigma <= _th_modz:
+    _low_th, _low_name = _th_3sigma, "3-Sigma"
+    _high_th, _high_name = _th_modz, "Mod-Z(3.5)"
+else:
+    _low_th, _low_name = _th_modz, "Mod-Z(3.5)"
+    _high_th, _high_name = _th_3sigma, "3-Sigma"
+_n_all = int(_all_eval_scores.size)
+_low_cnt = int(np.sum(_all_eval_scores >= _low_th))
+_high_cnt = int(np.sum(_all_eval_scores >= _high_th))
+_high_pct = (_high_cnt / max(1, _n_all)) * 100.0
+_high_p = float(np.mean(_all_eval_scores < _high_th) * 100.0)
+_high_cut_str = (
+    f"高於最高分({float(np.max(_all_eval_scores)):.4f})，切出 0 張"
+    if _high_cnt == 0
+    else f"切在 Rank {_high_cnt}/{_n_all} 之後 (共 {_high_cnt} 張, {_high_pct:.2f}%, 約 P{_high_p:.2f})"
+)
 m1std = mean_s + 1.0 * std_s
 m2std = mean_s + 2.0 * std_s
 m3std = mean_s + 3.0 * std_s
@@ -333,7 +356,9 @@ summary_block = [
     f" 🚨 無GT異常檢出統計       : 抓出異常並畫框 {len(flagged_anomalies)}/{total} 張 (檢出率 Anomaly Rate={anom_rate_pct:.2f}%) | 正常略過 {len(passed_normals)} 張",
     "-" * 90,
     f" 📊 盲池正常核心分數分佈   : Max={max_s:.4f} | P99={p99_s:.4f} | P95={p95_s:.4f} | Median={median_s:.4f} | Mean={mean_s:.4f} | Std={std_s:.4f}",
-    f" 📐 盲池正常核心門檻參考值 : mean+1*std={m1std:.4f} | mean+2*std={m2std:.4f} | mean+3*std={m3std:.4f}",
+    f" 📐 盲池正常核心門檻參考值 :  3-Sigma(Shewhart 1931)={_th_3sigma:.4f} | Mod-Z 3.5(Iglewicz 1993)={_th_modz:.4f}",
+    f"  🎯 兩者較小值參考         : [{_low_name}] = {_low_th:.4f} (切出 {_low_cnt}/{_n_all} 張, {_low_cnt/max(1,_n_all)*100.0:.2f}%)",
+    f"  📍 兩者較高值切點         : [{_high_name}] = {_high_th:.4f} -> {_high_cut_str}",
 ]
 if flagged_anomalies:
     anom_scores = [float(r["Max_Score"]) for r in flagged_anomalies]

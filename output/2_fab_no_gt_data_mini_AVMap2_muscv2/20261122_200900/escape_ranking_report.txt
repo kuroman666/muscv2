@@ -1,0 +1,76 @@
+=== MuSc-V2 High-Res Zero-Shot Anomaly Detection Report (Training-Free) ===
+Score Mode: FILTERED_ROBUST | Threshold Mode: auto | Effective Threshold: 0.3518 | Wafer Edge Mode: auto (Margin: 0.040)
+Core Box Ratio: 0.55 | Exported Anomaly Images: 0 | Skipped Normal Images: 31
+Benchmark Metrics (No-GT Sim) : I-AUROC=0.6793 | I-AP=0.4579 | F1-max=0.5714 (Best_Th=0.2603)
+Current Threshold Performance : Recall=0.00% (0/8) | FPR=0.00% (0/23) | Precision=0.00% | F1=0.00%
+Non-Golden Normal Score Dist: Max=0.3332 | P99=0.3291 | P95=0.3141 | Median=0.2488 | Mean=0.2540 | Std=0.0326
+Ablation Compare (Normal)   : Raw_Max=0.3345, Raw_Mean=0.2576 vs Filtered_Max=0.3332, Filtered_Mean=0.2540
+Threshold Ref (Mean+k*Std)  : mean+1*std=0.2866 | mean+2*std=0.3192 | mean+3*std=0.3518
+Overfit Diagnostic          : 🟢 Training-Free Zero-Shot (No Training Overfit)
+-------------------------------------------------------------------------------------------------------------------------------------------------
+Rank  | Original_Filename          | Status              | Max_Score | Raw_Score | Filt_Score | Delta    | BBoxes | Saved_Anomaly_Filename
+-------------------------------------------------------------------------------------------------------------------------------------------------
+1     | clean_7B3DAKP300_7B3DAKP3SB_PAT3_7.jpg | PASS_SKIPPED        | 0.3332    | 0.3345    | 0.3332     | -0.0013  | 0      | (未超過動態門檻，不輸出圖片)
+2     | escape_bad_7B3D87F000_7B3D87E9GB_PAT3_61.jpg | PASS_SKIPPED        | 0.3253    | 0.3292    | 0.3253     | -0.0039  | 0      | (未超過動態門檻，不輸出圖片)
+3     | escape_bad_7B3D87F000_7B3D87E9GB_PAT3_105.jpg | PASS_SKIPPED        | 0.3163    | 0.3203    | 0.3163     | -0.0040  | 0      | (未超過動態門檻，不輸出圖片)
+4     | clean_7B3DAKP300_7B3DAKP3SB_PAT3_66.jpg | PASS_SKIPPED        | 0.3143    | 0.3169    | 0.3143     | -0.0026  | 0      | (未超過動態門檻，不輸出圖片)
+5     | clean_7C3DAE9801_7C3DAGM9PA_PAT4_53.jpg | PASS_SKIPPED        | 0.3118    | 0.3187    | 0.3118     | -0.0070  | 0      | (未超過動態門檻，不輸出圖片)
+6     | escape_bad_7B3D87F000_7B3D87E9GB_PAT3_60.jpg | PASS_SKIPPED        | 0.2895    | 0.2947    | 0.2895     | -0.0052  | 0      | (未超過動態門檻，不輸出圖片)
+7     | clean_7C3DAE8901_7C3DAE89AA_PAT5_8.jpg | PASS_SKIPPED        | 0.2882    | 0.2888    | 0.2882     | -0.0005  | 0      | (未超過動態門檻，不輸出圖片)
+8     | escape_bad_7A3D829002_7C3DAEW6AA_PAT1_61.jpg | PASS_SKIPPED        | 0.2870    | 0.2936    | 0.2870     | -0.0066  | 0      | (未超過動態門檻，不輸出圖片)
+9     | clean_7B3D9A0600_7B3D9A06PB_PAT2_61.jpg | PASS_SKIPPED        | 0.2816    | 0.2828    | 0.2816     | -0.0012  | 0      | (未超過動態門檻，不輸出圖片)
+10    | clean_7A3D829002_7C3DAEW6AA_PAT1_8.jpg | PASS_SKIPPED        | 0.2734    | 0.2838    | 0.2734     | -0.0105  | 0      | (未超過動態門檻，不輸出圖片)
+11    | escape_bad_7A3D829002_7C3DAEW6AA_PAT1_62.jpg | PASS_SKIPPED        | 0.2673    | 0.2710    | 0.2673     | -0.0036  | 0      | (未超過動態門檻，不輸出圖片)
+12    | clean_7A3D829002_7C3DAEW6AA_PAT1_41.jpg | PASS_SKIPPED        | 0.2617    | 0.2811    | 0.2617     | -0.0193  | 0      | (未超過動態門檻，不輸出圖片)
+13    | escape_bad_7B3D87F000_7B3D87E9GB_PAT3_46.jpg | PASS_SKIPPED        | 0.2603    | 0.2613    | 0.2603     | -0.0010  | 0      | (未超過動態門檻，不輸出圖片)
+14    | clean_7CDDA00101_7C3DAFB8VA_PAT5_19.jpg | PASS_SKIPPED        | 0.2587    | 0.2646    | 0.2587     | -0.0058  | 0      | (未超過動態門檻，不輸出圖片)
+15    | clean_7A3D829002_7C3DAEW6AA_PAT1_100.jpg | PASS_SKIPPED        | 0.2551    | 0.2680    | 0.2551     | -0.0129  | 0      | (未超過動態門檻，不輸出圖片)
+16    | clean_7B3D9A0600_7B3D9A06PB_PAT2_42.jpg | PASS_SKIPPED        | 0.2524    | 0.2530    | 0.2524     | -0.0006  | 0      | (未超過動態門檻，不輸出圖片)
+17    | clean_7C3DAE8901_7C3DAEM2LB_PAT4_4.jpg | PASS_SKIPPED        | 0.2507    | 0.2512    | 0.2507     | -0.0005  | 0      | (未超過動態門檻，不輸出圖片)
+18    | clean_7A3D829002_7C3DAEW6AA_PAT1_75.jpg | PASS_SKIPPED        | 0.2488    | 0.2529    | 0.2488     | -0.0041  | 0      | (未超過動態門檻，不輸出圖片)
+19    | clean_7B3D99T000_7B3D98K6RA_PAT6_108.jpg | PASS_SKIPPED        | 0.2429    | 0.2438    | 0.2429     | -0.0009  | 0      | (未超過動態門檻，不輸出圖片)
+20    | clean_7B3D99T000_7B3D98K6RA_PAT6_5.jpg | PASS_SKIPPED        | 0.2423    | 0.2432    | 0.2423     | -0.0009  | 0      | (未超過動態門檻，不輸出圖片)
+21    | clean_7C3DAEX100_7C3DAEX1VB_PAT2_37.jpg | PASS_SKIPPED        | 0.2392    | 0.2424    | 0.2392     | -0.0031  | 0      | (未超過動態門檻，不輸出圖片)
+22    | clean_7B3DAKP300_7B3DAKP3SB_PAT1_32.jpg | PASS_SKIPPED        | 0.2383    | 0.2401    | 0.2383     | -0.0018  | 0      | (未超過動態門檻，不輸出圖片)
+23    | escape_bad_7B3D87F000_7B3D87E9GB_PAT3_76.jpg | PASS_SKIPPED        | 0.2378    | 0.2393    | 0.2378     | -0.0015  | 0      | (未超過動態門檻，不輸出圖片)
+24    | clean_7C3DAE8901_7C3DAEM2LB_PAT4_51.jpg | PASS_SKIPPED        | 0.2346    | 0.2369    | 0.2346     | -0.0023  | 0      | (未超過動態門檻，不輸出圖片)
+25    | clean_7B3D90D606_7C3DAGB4DA_PAT3_40.jpg | PASS_SKIPPED        | 0.2265    | 0.2273    | 0.2265     | -0.0008  | 0      | (未超過動態門檻，不輸出圖片)
+26    | clean_7C3DAE8901_7C3DAEM2LB_PAT4_64.jpg | PASS_SKIPPED        | 0.2244    | 0.2258    | 0.2244     | -0.0014  | 0      | (未超過動態門檻，不輸出圖片)
+27    | clean_7C3DAEX100_7C3DAEX1VB_PAT2_55.jpg | PASS_SKIPPED        | 0.2222    | 0.2230    | 0.2222     | -0.0008  | 0      | (未超過動態門檻，不輸出圖片)
+28    | clean_7B3D87F000_7B3D87E9GB_PAT3_9.jpg | PASS_SKIPPED        | 0.2216    | 0.2225    | 0.2216     | -0.0008  | 0      | (未超過動態門檻，不輸出圖片)
+29    | escape_bad_7A3D829002_7C3DAEW6AA_PAT1_91.jpg | PASS_SKIPPED        | 0.2183    | 0.2194    | 0.2183     | -0.0011  | 0      | (未超過動態門檻，不輸出圖片)
+30    | clean_7C3DAEX100_7C3DAEX1VB_PAT2_115.jpg | PASS_SKIPPED        | 0.2181    | 0.2194    | 0.2181     | -0.0012  | 0      | (未超過動態門檻，不輸出圖片)
+31    | clean_7C3DAE8901_7C3DAEL11B_PAT3_100.jpg | PASS_SKIPPED        | 0.2020    | 0.2042    | 0.2020     | -0.0022  | 0      | (未超過動態門檻，不輸出圖片)
+
+
+===========================================================================
+ [✅ MuSc-V2 推論完成 — 整體時間與所有檔案儲存位置總覽]
+---------------------------------------------------------------------------
+  [1] 整體推論階段總時間 (Total Inference Time) : 00:00:14.47 (14.47 秒)
+      ├─ Step 1 解析度防呆檢查 (31 張全圖)                : 00:00:00.00 (0.00 秒) (Cached)
+      ├─ Step 2 MuSc-V2 Zero-Shot 互評推理       : 00:00:14.25 (14.25 秒)
+      ├─ Step 3 RAM 縫合銷毀碎片與防誤報濾波畫框 : 00:00:00.22 (0.22 秒)
+      └─ 平均每張原圖推論耗時 (31 張原圖)         : 0.47 秒/張
+---------------------------------------------------------------------------
+  [2] 任務全程總執行時間 (Total Wall Time)      : 00:00:14.47 (14.47 秒)
+---------------------------------------------------------------------------
+  [3] 門檻篩選統計與分數分佈 (Score=FILTERED, Mode=auto, Eff_Thresh=0.3518):
+      🚨 超過門檻判定異常並畫框輸出 : 0 張
+      ✅ 未達門檻或微塵濾除直接略過 : 31 張 (不輸出圖片)
+      🏆 模擬盲池量化指標 (Eval)     : I-AUROC=0.6793 | I-AP=0.4579 | F1-max=0.5714 (@0.2603)
+      🎯 當前門檻實測表現 (Current)    : Recall=0.00% (0/8) | FPR=0.00% (0/23) | Precision=0.00% | F1=0.00%
+      📊 正常圖分數分佈 (防誤報濾波後) : Max=0.3332 | P99=0.3291 | P95=0.3141 | Median=0.2488 | Mean=0.2540 | Std=0.0326
+      📐 正常圖門檻參考值              : mean+1*std=0.2866 | mean+2*std=0.3192 | mean+3*std=0.3518
+      🔬 濾波前後正常圖對照 (Ablation) : [未濾波 Raw] Max=0.3345, Mean=0.2576, Std=0.0338 vs [防誤報濾波] Max=0.3332, Mean=0.2540, Std=0.0326
+      🩺 模型過擬合自檢 (Overfit)      : 🟢 Zero-Shot Training-Free (無參數訓練，天生 0 過擬合風險)
+---------------------------------------------------------------------------
+  [4] 本次推論結果儲存資料夾清單 (Saved Directories & Files):
+      🧹 子圖塊碎片 Tile .npy 狀態  : 已於 RAM 拼接完成後立即自動銷毀 (0 殘留)
+      📂 本次時間戳記推論主資料夾   : /home/kenny/project/muscv2/output/2_fab_no_gt_data_mini_AVMap2_muscv2/20261122_200900
+          ├── 異常紅框三合一對照圖  : /home/kenny/project/muscv2/output/2_fab_no_gt_data_mini_AVMap2_muscv2/20261122_200900/anomaly_images
+          ├── 異常1:1全解析度紅框圖 : /home/kenny/project/muscv2/output/2_fab_no_gt_data_mini_AVMap2_muscv2/20261122_200900/anomaly_images/full_res_bbox_only
+          ├── 異常熱力圖矩陣(.npy)  : /home/kenny/project/muscv2/output/2_fab_no_gt_data_mini_AVMap2_muscv2/20261122_200900/amap_npy
+          ├── 完整排名報表 (TXT)    : /home/kenny/project/muscv2/output/2_fab_no_gt_data_mini_AVMap2_muscv2/20261122_200900/escape_ranking_report.txt
+          ├── 完整排名報表 (CSV)    : /home/kenny/project/muscv2/output/2_fab_no_gt_data_mini_AVMap2_muscv2/20261122_200900/escape_ranking_report.csv
+          └── 本次執行日誌 (log.txt): /home/kenny/project/muscv2/output/2_fab_no_gt_data_mini_AVMap2_muscv2/20261122_200900/log.txt
+===========================================================================
