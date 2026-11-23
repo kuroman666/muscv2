@@ -2,6 +2,18 @@
 # 檔案位置: MuSc-V2/run_inside_muscv2.sh
 # 用途: 公司內部實機 (Fab Inside) 完全無 GT 盲池 MuSc-V2 Zero-Shot 一鍵測試腳本 (含自動 RAM/VRAM 背景監控)
 # 用法:
+#   0)先花 2 秒測試 Mask 大小（紅線是自動偵測的原始圓、綠線是內縮後的實際遮罩圓）：
+#     python 1_infer_muscv2_no_gt.py \
+#   --pool_dir /你的晶圓資料集路徑 \
+#   --wafer_edge_mode on \
+#   --pre_mask_margin 0.02 \
+#   --preview_mask 5
+#     確認沒問題後，拔掉 --preview_mask 並加上 --pre_mask 正式推論：
+#     python 1_infer_muscv2_no_gt.py \
+#   --pool_dir /你的晶圓資料集路徑 \
+#   --wafer_edge_mode on \
+#   --pre_mask \
+#   --pre_mask_margin 0.02
 #   1) 動態門檻 (自動 P95 + 穩健統計): bash run_inside_muscv2.sh ./datasets/fab_wafer_pool
 #   2) 固定門檻 (例如 0.32):          bash run_inside_muscv2.sh ./datasets/fab_wafer_pool 0.32
 # 執行期間若想即時偷看資源變化，可隨時執行 tail -f output/latest_mem_monitor.log（廠外）
@@ -76,6 +88,14 @@ WAFER_EDGE_MARGIN=0.04
 BORDER_RATIO=0.02
 SPECKLE_FILTER_RATIO=0.008
 MIN_AREA_RATIO=0.00012
+
+# --- 推論前圓形 Mask 遮罩參數 (先跑 bash test_mask_muscv2.sh 測好再貼進來) ---
+PRE_MASK=""                           # 啟用設為 "--pre_mask"；關閉留空 ""
+PRE_MASK_MARGIN=0.02                  # 圓形 Mask 半徑內縮比例 (例如 0.02=內縮2%，負值為外擴)
+PRE_MASK_FILL=0                       # 背景填補像素值 (預設 0=純黑)
+MASK_CX=-1                            # 手動圓心 X (-1=自動偵測；0~1=寬度比例；>1=像素)
+MASK_CY=-1                            # 手動圓心 Y (-1=自動偵測；0~1=高度比例；>1=像素)
+MASK_R=-1                             # 手動半徑 R (-1=自動偵測；0~1=短邊比例；>1=像素)
 
 # --- Step 2 評估結果拆分參數 (對應 2_split_eval_results.py) ---
 NUM_PACKS=3
@@ -225,7 +245,12 @@ run_single_inside_muscv2_pool() {
     --tile_overlap "${TILE_OVERLAP}" \
     --infer_batch_size "${INFER_BATCH_SIZE}" \
     --bg_std_thresh "${BG_STD_THRESH}" \
-    ${FORCE_INFER} ${RAW_SCORE_MODE} ${DISABLE_TILING}
+    --pre_mask_margin "${PRE_MASK_MARGIN}" \
+    --pre_mask_fill "${PRE_MASK_FILL}" \
+    --mask_cx "${MASK_CX}" \
+    --mask_cy "${MASK_CY}" \
+    --mask_r "${MASK_R}" \
+    ${PRE_MASK} ${FORCE_INFER} ${RAW_SCORE_MODE} ${DISABLE_TILING}
 
   if [ "${RUN_SPLIT_EVAL}" -eq 1 ] && [ -f "2_split_eval_results.py" ]; then
     echo "---------------------------------------------------------------------------"

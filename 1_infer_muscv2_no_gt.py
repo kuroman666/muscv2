@@ -311,6 +311,187 @@ def detect_circular_wafer_geometry(
     except Exception:
         return False, h * 0.5, w * 0.5, min(h, w) * 0.5
 
+def get_wafer_geometry(
+    full_rgb: np.ndarray,
+    wafer_edge_mode: str,
+    category: str,
+    manual_cx: float = -1.0,
+    manual_cy: float = -1.0,
+    manual_r: float = -1.0,
+) -> Tuple[bool, float, float, float]:
+    """整合自動偵測與手動指定圓心/半徑 (輸入 0~1 為比例，>1 為像素，<=0 則用自動偵測)。"""
+    h, w = full_rgb.shape[:2]
+    has_manual = (manual_cx > 0) or (manual_cy > 0) or (manual_r > 0)
+
+    if manual_cx > 0 and manual_cy > 0 and manual_r > 0:
+        cx = manual_cx * w if manual_cx <= 1.0 else manual_cx
+        cy = manual_cy * h if manual_cy <= 1.0 else manual_cy
+        r = manual_r * min(h, w) if manual_r <= 1.0 else manual_r
+        return True, float(cy), float(cx), float(r)
+
+    use_circle, cy, cx, r = detect_circular_wafer_geometry_from_rgb(
+        full_rgb, wafer_edge_mode=wafer_edge_mode, category=category
+    )
+    if has_manual:
+        use_circle = True
+        if manual_cx > 0:
+            cx = manual_cx * w if manual_cx <= 1.0 else manual_cx
+        if manual_cy > 0:
+            cy = manual_cy * h if manual_cy <= 1.0 else manual_cy
+        if manual_r > 0:
+            r = manual_r * min(h, w) if manual_r <= 1.0 else manual_r
+    return use_circle, float(cy), float(cx), float(r)
+
+
+def apply_circular_pre_mask(
+    full_rgb: np.ndarray,
+    wafer_edge_mode: str,
+    category: str,
+    pre_mask_margin: float = 0.0,
+    fill_value: int = 0,
+    cached_geom: Optional[Tuple[bool, float, float, float]] = None,
+) -> Tuple[np.ndarray, Tuple[bool, float, float, float], float]:
+    """在推論前將圓形晶圓外的背景塗掉，回傳 (遮罩後RGB, 幾何資訊, 實際遮罩半徑)。"""
+    h, w = full_rgb.shape[:2]
+    if cached_geom is not None:
+        use_circle, cy, cx, radius = cached_geom
+    else:
+        use_circle, cy, cx, radius = detect_circular_wafer_geometry_from_rgb(
+            full_rgb, wafer_edge_mode=wafer_edge_mode, category=category
+        )
+
+    mask_radius = max(1.0, radius * (1.0 - pre_mask_margin))
+    if not use_circle:
+        return full_rgb, (use_circle, cy, cx, radius), mask_radius
+
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.circle(mask, (int(round(cx)), int(round(cy))), int(round(mask_radius)), 255, -1)
+
+    masked_rgb = full_rgb.copy()
+    masked_rgb[mask == 0] = fill_value
+    return masked_rgb, (use_circle, cy, cx, radius), mask_radius
+
+
+def run_mask_preview(
+    pool_dir: str,
+    out_dir: str,
+    num_samples: int,
+    wafer_edge_mode: str,
+    category: str,
+    pre_mask_margin: float,
+    fill_value: int,
+    manual_cx: float,
+    manual_cy: float,
+    manual_r: float,
+    log_files: List[str],
+):
+    """抽樣 N 張圖產出圓形 Mask 預覽對照圖，並輸出可直接貼回 run_inside_muscv2.sh 的參數建議。"""
+    img_paths = scan_pool_images(pool_dir)
+    if not img_paths:
+        raise FileNotFoundError(f"在 {pool_dir} 找不到任何圖片！")
+
+    indices = np.linspace(0, len(img_paths) - 1, min(num_samples, len(img_paths)), dtype=int)
+    preview_dir = os.path.join(out_dir, "mask_preview")
+    os.makedirs(preview_dir, exist_ok=True)
+
+    log_and_print(
+        f"\n[🔍 Mask 預覽模式] 抽樣 {len(indices)}/{len(img_paths)} 張 | "
+        f"wafer_edge_mode={wafer_edge_mode} | pre_mask_margin={pre_mask_margin:g} | fill={fill_value} | "
+        f"manual=(cx={manual_cx:g}, cy={manual_cy:g}, r={manual_r:g})",
+        log_files,
+    )
+
+    stats_list = []
+    for idx in indices:
+        fpath = img_paths[idx]
+        fname = os.path.basename(fpath)
+        rgb = load_image_rgb_uint8(fpath)
+        h, w = rgb.shape[:2]
+
+        geom = get_wafer_geometry(
+            rgb,
+            wafer_edge_mode=wafer_edge_mode,
+            category=category,
+            manual_cx=manual_cx,
+            manual_cy=manual_cy,
+            manual_r=manual_r,
+        )
+        masked_rgb, (use_circle, cy, cx, r_raw), r_mask = apply_circular_pre_mask(
+            rgb,
+            wafer_edge_mode=wafer_edge_mode,
+            category=category,
+            pre_mask_margin=pre_mask_margin,
+            fill_value=fill_value,
+            cached_geom=geom,
+        )
+        stats_list.append((w, h, cx, cy, r_raw, r_mask, use_circle))
+
+        # 左圖：紅圈=原始半徑、綠圈=套用 margin 後實際遮罩半徑、黃十字=圓心；右圖：遮罩後結果
+        orig_bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        masked_bgr = cv2.cvtColor(masked_rgb, cv2.COLOR_RGB2BGR)
+        thick = max(2, int(round(max(h, w) / 400)))
+        if use_circle:
+            cv2.circle(orig_bgr, (int(round(cx)), int(round(cy))), int(round(r_raw)), (0, 0, 255), thick)
+            cv2.circle(orig_bgr, (int(round(cx)), int(round(cy))), int(round(r_mask)), (0, 255, 0), thick)
+            cv2.drawMarker(
+                orig_bgr,
+                (int(round(cx)), int(round(cy))),
+                (0, 255, 255),
+                cv2.MARKER_CROSS,
+                max(20, int(max(h, w) * 0.02)),
+                thick,
+            )
+
+        ph = min(800, h)
+        pw = int(round(w * (ph / float(h))))
+        vis = np.hstack([
+            cv2.resize(orig_bgr, (pw, ph), interpolation=cv2.INTER_AREA),
+            cv2.resize(masked_bgr, (pw, ph), interpolation=cv2.INTER_AREA),
+        ])
+        info_txt = (
+            f"{fname} ({w}x{h}) | center=({cx:.0f},{cy:.0f}) | "
+            f"raw_r={r_raw:.0f} -> mask_r={r_mask:.0f} (ratio={r_mask/min(h,w):.4f})"
+        )
+        cv2.putText(vis, info_txt, (12, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
+
+        out_path = os.path.join(preview_dir, f"preview_{fname}")
+        cv2.imwrite(out_path, vis)
+        log_and_print(f"  -> {info_txt} | 已存檔: {out_path}", log_files)
+
+    med_w = float(np.median([s[0] for s in stats_list]))
+    med_h = float(np.median([s[1] for s in stats_list]))
+    med_cx = float(np.median([s[2] for s in stats_list]))
+    med_cy = float(np.median([s[3] for s in stats_list]))
+    med_r_raw = float(np.median([s[4] for s in stats_list]))
+    med_r_mask = float(np.median([s[5] for s in stats_list]))
+    min_side = max(1.0, min(med_w, med_h))
+
+    rec_msg = (
+        f"\n{'=' * 78}\n"
+        f" [✅ Mask 預覽完成] 請開啟資料夾檢視對照圖 (紅圈=原始半徑 / 綠圈=實際遮罩 / 黃十字=圓心):\n"
+        f"    📂 {os.path.abspath(preview_dir)}\n"
+        f"{'-' * 78}\n"
+        f" [📐 抽樣中位數幾何統計 (原圖約 {med_w:.0f}x{med_h:.0f})]\n"
+        f"    • 像素值 : cx={med_cx:.1f}, cy={med_cy:.1f}, raw_r={med_r_raw:.1f}, 實際 mask_r={med_r_mask:.1f}\n"
+        f"    • 比例值 : cx={med_cx/med_w:.4f}, cy={med_cy/med_h:.4f}, raw_r={med_r_raw/min_side:.4f}, mask_r={med_r_mask/min_side:.4f}\n"
+        f"{'-' * 78}\n"
+        f" [📋 若綠圈大小滿意，請直接把以下參數貼進 run_inside_muscv2.sh 的參數區]\n"
+        f"    WAFER_EDGE_MODE=\"{wafer_edge_mode}\"\n"
+        f"    PRE_MASK=\"--pre_mask\"\n"
+        f"    PRE_MASK_MARGIN={pre_mask_margin:g}\n"
+        f"    PRE_MASK_FILL={fill_value}\n"
+        f"    MASK_CX={manual_cx:g}\n"
+        f"    MASK_CY={manual_cy:g}\n"
+        f"    MASK_R={manual_r:g}\n"
+        f"{'-' * 78}\n"
+        f" [🔧 若綠圈還不準，微調口訣]\n"
+        f"    • 綠圈切太裡面 (吃掉晶圓邊緣) -> 調小 PRE_MASK_MARGIN (可設負值如 -0.01) 或調大 MASK_R\n"
+        f"    • 綠圈切太外面 (留到背景雜訊) -> 調大 PRE_MASK_MARGIN (如 0.03) 或調小 MASK_R\n"
+        f"    • 黃十字圓心歪掉              -> 直接改用像素或比例指定 MASK_CX / MASK_CY (參考上方中位數)\n"
+        f"{'=' * 78}"
+    )
+    log_and_print(rec_msg, log_files)
+
 
 # =====================================================================
 # 智慧解析度防呆平行切塊 (Resolution-Aware Parallel Tiling) 與無壓縮存檔模組
@@ -400,6 +581,12 @@ def _tile_single_image_worker(task_args: Tuple) -> Tuple[str, Dict, int, int]:
         disable_tiling,
         wafer_edge_mode,
         category,
+        pre_mask,
+        pre_mask_margin,
+        pre_mask_fill,
+        manual_cx,
+        manual_cy,
+        manual_r,
     ) = task_args
     cv2.setNumThreads(1)
     abs_fpath = os.path.abspath(fpath)
@@ -407,10 +594,38 @@ def _tile_single_image_worker(task_args: Tuple) -> Tuple[str, Dict, int, int]:
 
     if not should_tile:
         tile_stem = f"{stem}__full_y0000_x0000_h{h:04d}_w{w:04d}"
+        out_tile_path = abs_fpath
+        out_tile_fname = os.path.basename(abs_fpath)
+        wafer_geom_cache = None
+
+        if pre_mask:
+            img = load_image_rgb_uint8(fpath)
+            use_circle, cy_f, cx_f, r_f = get_wafer_geometry(
+                img,
+                wafer_edge_mode=wafer_edge_mode,
+                category=category,
+                manual_cx=manual_cx,
+                manual_cy=manual_cy,
+                manual_r=manual_r,
+            )
+            img, _, _ = apply_circular_pre_mask(
+                img,
+                wafer_edge_mode=wafer_edge_mode,
+                category=category,
+                pre_mask_margin=pre_mask_margin,
+                fill_value=pre_mask_fill,
+                cached_geom=(use_circle, cy_f, cx_f, r_f),
+            )
+            out_tile_fname = f"{tile_stem}.png"
+            out_tile_path = os.path.abspath(os.path.join(tiled_pool_dir, out_tile_fname))
+            Image.fromarray(img).save(out_tile_path, format="PNG", compress_level=0)
+            wafer_geom_cache = [bool(use_circle), float(cy_f), float(cx_f), float(r_f)]
+            del img
+
         tiles_info = [{
             "tile_stem": tile_stem,
-            "tile_fname": os.path.basename(abs_fpath),
-            "tile_abs_path": abs_fpath,
+            "tile_fname": out_tile_fname,
+            "tile_abs_path": out_tile_path,
             "is_full_image": True,
             "y": 0,
             "x": 0,
@@ -425,13 +640,29 @@ def _tile_single_image_worker(task_args: Tuple) -> Tuple[str, Dict, int, int]:
             "tiling_applied": False,
             "tiles": tiles_info,
         }
+        if wafer_geom_cache is not None:
+            entry["wafer_geom"] = wafer_geom_cache
         return rel_fname, entry, 1, 0
 
     img = load_image_rgb_uint8(fpath)
     # 順便在原圖已載入記憶體時快取圓心座標，Step 3 完全免重讀 5000x5000 原圖
-    use_circle, cy_f, cx_f, r_f = detect_circular_wafer_geometry_from_rgb(
-        img, wafer_edge_mode=wafer_edge_mode, category=category
+    use_circle, cy_f, cx_f, r_f = get_wafer_geometry(
+        img,
+        wafer_edge_mode=wafer_edge_mode,
+        category=category,
+        manual_cx=manual_cx,
+        manual_cy=manual_cy,
+        manual_r=manual_r,
     )
+    if pre_mask:
+        img, _, _ = apply_circular_pre_mask(
+            img,
+            wafer_edge_mode=wafer_edge_mode,
+            category=category,
+            pre_mask_margin=pre_mask_margin,
+            fill_value=pre_mask_fill,
+            cached_geom=(use_circle, cy_f, cx_f, r_f),
+        )
 
     ys = get_axis_positions(h, tile_size, stride)
     xs = get_axis_positions(w, tile_size, stride)
@@ -509,6 +740,12 @@ def prepare_tiled_test_pool(
     wafer_edge_mode: str = "auto",
     category: str = "wafer",
     num_workers: int = 8,
+    pre_mask: bool = False,
+    pre_mask_margin: float = 0.0,
+    pre_mask_fill: int = 0,
+    manual_cx: float = -1.0,
+    manual_cy: float = -1.0,
+    manual_r: float = -1.0,
 ) -> Dict:
     """遞迴搜尋測試盲池中的所有圖片，執行大圖防呆判定與多核心平行切塊。"""
     safe_rmtree(tiled_pool_dir)
@@ -555,6 +792,12 @@ def prepare_tiled_test_pool(
             f"   ↳ 共 {large_img_count}/{len(img_paths)} 張大圖將執行 {tile_size}x{tile_size} (Overlap={tile_overlap}) "
             f"高解析度重疊切塊 (Workers={num_workers}, 無壓縮 PNG + 圓心快取)！"
         )
+    if pre_mask:
+        os.makedirs(tiled_pool_dir, exist_ok=True)
+        guardrail_msg += (
+            f"\n   ↳ [⭕ 推論前圓形 Mask 已啟用] margin={pre_mask_margin:g}, fill={pre_mask_fill}, "
+            f"manual=(cx={manual_cx:g}, cy={manual_cy:g}, r={manual_r:g})"
+        )
     log_and_print("\n" + guardrail_msg, log_files)
 
     manifest = {
@@ -576,12 +819,14 @@ def prepare_tiled_test_pool(
             fpath, h, w, rel_fname, stem, tiled_pool_dir,
             tile_size, stride, min_tiling_res, bg_std_thresh,
             disable_tiling, wafer_edge_mode, category,
+            pre_mask, pre_mask_margin, pre_mask_fill,
+            manual_cx, manual_cy, manual_r,
         ))
 
     total_tiles = 0
     skipped_bg_tiles = 0
     num_pool_imgs = len(tasks)
-    eff_workers = max(1, min(int(num_workers), num_pool_imgs)) if large_img_count > 0 else 1
+    eff_workers = max(1, min(int(num_workers), num_pool_imgs)) if (large_img_count > 0 or pre_mask) else 1
     t_tile_loop_start = time.perf_counter()
 
     ordered_results: Dict[str, Dict] = {}
@@ -1506,32 +1751,38 @@ def compute_dynamic_effective_threshold(
     sigma_k: float = 3.5,
     top_k: int = 0,
 ) -> Tuple[float, str]:
-    """雙模式門檻判定 (MuSc-V2 Zero-Shot 版)：Fixed 或 Min(3-Sigma, Modified Z-Score)。"""
+    """雙百分位門檻判定：僅計算 Top 5% (P95) 與 Top 3% (P97)，固定以 Top 5% 作為輸出紅框之有效門檻。"""
     scores_arr = np.array(pool_scores, dtype=np.float32)
     if scores_arr.size == 0:
-        fallback = float(user_threshold) if user_threshold > 0 else float(min_threshold)
+        fallback = float(min_threshold)
         return fallback, f"無樣本保底門檻 ({fallback:.4f})"
 
     total_n = int(scores_arr.size)
-    mean_val = float(np.mean(scores_arr))
-    std_val = float(np.std(scores_arr))
-    thresh_3sigma = mean_val + 3.0 * std_val
+    thresh_top5 = float(np.percentile(scores_arr, 95.0))  # Top 5% (P95)
+    thresh_top3 = float(np.percentile(scores_arr, 97.0))  # Top 3% (P97)
 
-    med_val = float(np.median(scores_arr))
-    mad_val = float(np.median(np.abs(scores_arr - med_val)))
-    thresh_mod_z = med_val + (3.5 / 0.6745) * mad_val
+    # 計算 Top 5% 切出的張數與比例（作為實際輸出 Bounding Box 的門檻）
+    top5_count = int(np.sum(scores_arr >= thresh_top5))
+    top5_pct = (top5_count / total_n) * 100.0
 
-    if user_threshold is not None and float(user_threshold) > 0.0:
-        eff_thresh = float(user_threshold)
-        eff_count = int(np.sum(scores_arr >= eff_thresh))
-        eff_pct = (eff_count / total_n) * 100.0
-        desc = (
-            f"Fixed 固定門檻 (沿用基準集設定) = {eff_thresh:.4f} "
-            f"(本時期切出 {eff_count}/{total_n} 張, {eff_pct:.2f}%)\n"
-            f"           ├─ [本時期飄移參考] 3-Sigma (Shewhart 1931)         : {thresh_3sigma:.4f} (Mean={mean_val:.4f}, Std={std_val:.4f})\n"
-            f"           └─ [本時期飄移參考] Modified Z-Score (Iglewicz 1993): {thresh_mod_z:.4f} (Median={med_val:.4f}, MAD={mad_val:.4f})"
+    # 計算 Top 3% 切在 score 的位置與張數
+    top3_count = int(np.sum(scores_arr >= thresh_top3))
+    top3_pct = (top3_count / total_n) * 100.0
+    if top3_count == 0:
+        top3_cut_info = f"高於全體最高分 ({float(np.max(scores_arr)):.4f})，切出 0 張 (0.00%)"
+    else:
+        top3_cut_info = (
+            f"切在 Score = {thresh_top3:.4f} (位於 Rank {top3_count}/{total_n} 之後，"
+            f"共 {top3_count} 張 >= 該門檻, 佔 {top3_pct:.2f}%)"
         )
-        return eff_thresh, desc
+
+    desc = (
+        f"採用 [Top 5% (P95)] = {thresh_top5:.4f} 作為畫框門檻 "
+        f"(切出 {top5_count}/{total_n} 張, {top5_pct:.2f}%)\n"
+        f"           ├─ Top 5% (P95) 門檻 : {thresh_top5:.4f} (輸出 Bounding Box 基準)\n"
+        f"           └─ Top 3% (P97) 參考 : {top3_cut_info}"
+    )
+    return thresh_top5, desc
 
     if thresh_3sigma <= thresh_mod_z:
         eff_thresh, eff_name = thresh_3sigma, "3-Sigma (mean+3*std)"
@@ -2185,6 +2436,15 @@ def main():
     parser.add_argument("--num_workers", type=int, default=default_workers, help="切塊、讀圖與縫合之多核心 Worker 數")
     parser.add_argument("--stitch_max_dim", type=int, default=1024, help="縫合與濾波畫布最大邊長 (預設 1024，設 0 則退回原圖解析度)")
     parser.add_argument("--amp_dtype", type=str, default="bf16", choices=["bf16", "fp16", "off"], help="GPU 混合精度設定")
+
+    # mask 參數
+    parser.add_argument("--pre_mask", action="store_true", help="推論前先用圓形 Mask 蓋掉背景")
+    parser.add_argument("--pre_mask_margin", type=float, default=0.0, help="圓形 Mask 內縮比例 (例如 0.02 代表半徑內縮 2%%，負值為外擴)")
+    parser.add_argument("--pre_mask_fill", type=int, default=0, help="背景填補像素值 (預設 0=純黑)")
+    parser.add_argument("--preview_mask", type=int, default=0, help="大於 0 時僅抽樣 N 張輸出 Mask 預覽圖並直接結束，不執行推論")
+    parser.add_argument("--mask_cx", type=float, default=-1.0, help="手動指定圓心 X (0~1 為寬度比例，>1 為像素，-1 為自動)")
+    parser.add_argument("--mask_cy", type=float, default=-1.0, help="手動指定圓心 Y (0~1 為高度比例，>1 為像素，-1 為自動)")
+    parser.add_argument("--mask_r", type=float, default=-1.0, help="手動指定半徑 R (0~1 為短邊比例，>1 為像素，-1 為自動)")
     args = parser.parse_args()
 
     if not args.category or args.category.lower() == "auto":
@@ -2220,6 +2480,22 @@ def main():
         log_files,
     )
 
+    if args.preview_mask > 0:
+        run_mask_preview(
+            pool_dir=args.pool_dir,
+            out_dir=run_out_dir,
+            num_samples=args.preview_mask,
+            wafer_edge_mode=args.wafer_edge_mode,
+            category=args.category,
+            pre_mask_margin=args.pre_mask_margin,
+            fill_value=args.pre_mask_fill,
+            manual_cx=args.mask_cx,
+            manual_cy=args.mask_cy,
+            manual_r=args.mask_r,
+            log_files=log_files,
+        )
+        return
+
     if args.mock_from_mvtec:
         existing_pool_imgs = scan_pool_images(args.pool_dir) if os.path.isdir(args.pool_dir) else []
         if existing_pool_imgs and not args.force_infer:
@@ -2233,7 +2509,10 @@ def main():
 
     pool_signature = compute_pool_signature(args.pool_dir)
     tile_config_key = (
-        f"mtr{args.min_tiling_res}_t{args.tile_size}_ov{args.tile_overlap}_bg{args.bg_std_thresh:g}_dt{int(args.disable_tiling)}"
+        f"mtr{args.min_tiling_res}_t{args.tile_size}_ov{args.tile_overlap}"
+        f"_bg{args.bg_std_thresh:g}_dt{int(args.disable_tiling)}"
+        f"_pm{int(args.pre_mask)}_pmm{args.pre_mask_margin:g}_pmf{args.pre_mask_fill}"
+        f"_cx{args.mask_cx:g}_cy{args.mask_cy:g}_r{args.mask_r:g}"
     )
 
     amap_dump_dir = os.path.join(run_out_dir, "amap_npy")
@@ -2287,6 +2566,12 @@ def main():
             wafer_edge_mode=args.wafer_edge_mode,
             category=args.category,
             num_workers=args.num_workers,
+            pre_mask=args.pre_mask,
+            pre_mask_margin=args.pre_mask_margin,
+            pre_mask_fill=args.pre_mask_fill,
+            manual_cx=args.mask_cx,
+            manual_cy=args.mask_cy,
+            manual_r=args.mask_r,
         )
         test_tile_sec = time.perf_counter() - t_test_tile_start
         num_test_images = manifest.get("num_images", 1)
