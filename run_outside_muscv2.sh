@@ -41,7 +41,6 @@ POOL_MODE="escape"
 DEFECT_LIMIT=8
 REBUILD_POOL=""                       # 若想強制重建模擬盲池，設為 "--rebuild_pool"
 FORCE_INFER=""                        # 若想強制重切測試塊並重跑推論，設為 "--force_infer"
-RUN_SPLIT_EVAL=1
 
 # --- MuSc-V2 Zero-Shot 互評超參數 ---
 R_LIST="1,3,5"
@@ -74,13 +73,6 @@ INFER_BATCH_SIZE=16
 BG_STD_THRESH=1.5
 DISABLE_TILING=""                     # 若想強制關閉切塊，設為 "--disable_tiling"
 
-# --- Step 2 評估結果拆分參數 ---
-NUM_PACKS=3
-SPLIT_COUNTS=""
-SPLIT_RATIOS="1:1:1"
-SPLIT_ORDER="stratified"
-RECOMPUTE_PACK_THRESH=""
-USE_SYMLINK="--symlink"
 # ===============================================================
 
 BATCH_TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
@@ -327,7 +319,7 @@ run_single_public_category() {
     prepare_public_sim_pool "${CAT_DIR}" "${SIM_POOL_DIR}" "${POOL_MODE}" "${DEFECT_LIMIT}" "${REBUILD_POOL}"
 
     echo "---------------------------------------------------------------------------"
-    echo " [Step 1/2] 執行 1_infer_muscv2_no_gt.py -> Zero-Shot 互評推理與防誤報紅框定位"
+    echo " [推論執行] 執行 1_infer_muscv2_no_gt.py -> Zero-Shot 互評推理與防誤報紅框定位"
     echo "---------------------------------------------------------------------------"
     local LAYER_ARG=()
     if [ -n "${FEATURE_LAYERS}" ]; then
@@ -365,36 +357,6 @@ run_single_public_category() {
         --infer_batch_size "${INFER_BATCH_SIZE}" \
         --bg_std_thresh "${BG_STD_THRESH}" \
         ${FORCE_INFER} ${RAW_SCORE_MODE} ${DISABLE_TILING}
-
-    if [ "${RUN_SPLIT_EVAL}" -eq 1 ] && [ -f "2_split_eval_results.py" ]; then
-        echo "---------------------------------------------------------------------------"
-        echo " [Step 2/2] 執行 2_split_eval_results.py -> 拆分為 ${NUM_PACKS} 份獨立 Eval 報表"
-        echo "---------------------------------------------------------------------------"
-        local SPLIT_ARGS=()
-        if [ -n "${SPLIT_COUNTS}" ]; then
-            SPLIT_ARGS+=(--counts "${SPLIT_COUNTS}")
-        elif [ -n "${SPLIT_RATIOS}" ]; then
-            if [ "${SPLIT_RATIOS}" = "1:1:1" ] && [ "${NUM_PACKS}" -ne 3 ]; then
-                local AUTO_RATIOS
-                AUTO_RATIOS=$(printf "1:%.0s" $(seq 1 "${NUM_PACKS}") | sed 's/:$//')
-                SPLIT_ARGS+=(--ratios "${AUTO_RATIOS}")
-            else
-                SPLIT_ARGS+=(--ratios "${SPLIT_RATIOS}")
-            fi
-        fi
-
-        python 2_split_eval_results.py \
-            --src_dir "${SAVE_BASE_DIR}" \
-            --num_packs "${NUM_PACKS}" \
-            --split_order "${SPLIT_ORDER}" \
-            --sigma_k "${SIGMA_K}" \
-            --auto_percentile "${AUTO_PERCENTILE}" \
-            --min_threshold "${MIN_THRESHOLD}" \
-            --threshold "${THRESHOLD}" \
-            --top_k "${TOP_K}" \
-            "${SPLIT_ARGS[@]}" \
-            ${RECOMPUTE_PACK_THRESH} ${USE_SYMLINK}
-    fi
 
 python - "${SAVE_BASE_DIR}" "${CAT_NAME}" "${UNIQUE_TAG}" "${BATCH_SUMMARY_TXT}" "${BATCH_SUMMARY_CSV}" << 'PYEOF'
 import os
