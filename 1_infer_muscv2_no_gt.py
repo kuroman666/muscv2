@@ -1,5 +1,5 @@
 # 檔案位置: MuSc-V2/1_infer_muscv2_no_gt.py
-# 用途: MuSc-V2 Training-Free & Zero-Shot 無損加速版
+# 用途: MuSc-V2 Training-Free & Zero-Shot 無損加速版 (完整還原原論文 SNAMD SWPooling + RsCon k=7 WMO)
 # (GPU端: 高Batch/TF32/AMP/多執行緒預讀 + RAM充足時單次Forward收齊全部層；
 #  I/O端: 原生解析度float32 .npy + 無壓縮PNG + 圓心座標快取；
 #  後處理端: 1024x1024降維畫布 + ProcessPoolExecutor多核心平行縫合濾波 + 僅異常圖映回1:1原圖畫框)
@@ -40,17 +40,42 @@ if REPO_ROOT not in sys.path:
 
 
 def get_available_ram_bytes() -> int:
-    """讀取 Linux 系統目前可用主記憶體 (MemAvailable) 位元組數。"""
+    """讀取 Linux 可用主記憶體，並自動偵測 Docker / cgroup 容器記憶體上限。"""
+    host_avail = 32 * (1024 ** 3)
     try:
         with open("/proc/meminfo", "r", encoding="utf-8") as f:
             for line in f:
                 if line.startswith("MemAvailable:"):
                     parts = line.split()
                     if len(parts) >= 2:
-                        return int(parts[1]) * 1024
+                        host_avail = int(parts[1]) * 1024
+                        break
     except Exception:
         pass
-    return 32 * (1024 ** 3)
+
+    cgroup_avail = host_avail
+    # 檢查 cgroup v2 (/sys/fs/cgroup/memory.max)
+    try:
+        with open("/sys/fs/cgroup/memory.max", "r", encoding="utf-8") as f:
+            max_str = f.read().strip()
+        if max_str.isdigit():
+            limit = int(max_str)
+            with open("/sys/fs/cgroup/memory.current", "r", encoding="utf-8") as f:
+                cur = int(f.read().strip())
+            cgroup_avail = max(0, limit - cur)
+    except Exception:
+        # 退回檢查 cgroup v1
+        try:
+            with open("/sys/fs/cgroup/memory/memory.limit_in_bytes", "r", encoding="utf-8") as f:
+                limit = int(f.read().strip())
+            if limit < (1 << 60):
+                with open("/sys/fs/cgroup/memory/memory.usage_in_bytes", "r", encoding="utf-8") as f:
+                    cur = int(f.read().strip())
+                cgroup_avail = max(0, limit - cur)
+        except Exception:
+            pass
+
+    return min(host_avail, cgroup_avail)
 
 
 def format_duration(seconds: float) -> str:
@@ -310,6 +335,7 @@ def detect_circular_wafer_geometry(
         return res
     except Exception:
         return False, h * 0.5, w * 0.5, min(h, w) * 0.5
+
 
 def get_wafer_geometry(
     full_rgb: np.ndarray,
@@ -918,7 +944,7 @@ def is_tiled_png_pool_valid(
 
 
 # =====================================================================
-# MuSc-V2 Training-Free & Zero-Shot 互評推理引擎 (單次多層提取 + 多執行緒預讀 + 原生解析度存檔)
+# MuSc-V2 Training-Free & Zero-Shot 互評推理引擎 (SNAMD SWPooling + MSM + RsCon)
 # =====================================================================
 
 def resolve_offline_vit_ckpt(ckpt_path: str, log_files: List[str]) -> Optional[str]:
@@ -1068,6 +1094,19 @@ def load_muscv2_vision_backbone(
     return model, embed_dim, patch_size, img_input_size, default_layers
 
 
+def _swpooling_2d(feat_2d: torch.Tensor, r: int) -> torch.Tensor:
+    """MuSc-V2 原論文 SNAMD 的 Similarity-Weighted Pooling (Eq. 5 & 6)。"""
+    b, c, h, w = feat_2d.shape
+    center = feat_2d.flatten(2).unsqueeze(2)  # (B, C, 1, H*W)
+    nbrs = F.unfold(feat_2d, kernel_size=r, padding=r // 2, stride=1).view(b, c, r * r, h * w)
+    # Eq. (5): Lambda = exp(-||F(N_r^m) - F(m)||_2)
+    dist = torch.norm(nbrs - center, p=2, dim=1, keepdim=True)
+    weights = torch.exp(-dist)
+    # Eq. (6): mean(Lambda * F(N_r^m))
+    agg = (weights * nbrs).mean(dim=2)  # (B, C, H*W)
+    return agg.transpose(1, 2)          # (B, H*W, C)
+
+
 def _run_msm_for_single_layer(
     layer_raw_buf: torch.Tensor,
     l_idx: int,
@@ -1080,121 +1119,113 @@ def _run_msm_for_single_layer(
     parent_ids_tensor: torch.Tensor,
     mutual_ratio: float,
     max_peer_tiles: int,
-    num_combos: int,
+    num_layers_to_run: int,
     msm_chunk_size: int,
     device: torch.device,
     patch_scores_accum: torch.Tensor,
     t_total_infer_start: float,
 ) -> None:
-    """針對單一層的特徵緩衝區，依序計算所有 r_list 尺度的跨片互評 (MSM)。"""
-    for r_step, r in enumerate(r_list, 1):
-        combo_idx = (layer_step - 1) * len(r_list) + r_step
-        t_msm_step = time.perf_counter()
+    """針對單一層特徵：先執行原論文 SNAMD (L2正規化 + 多尺度 SWPooling 融合壓縮)，再執行單次 MSM 互評。"""
+    t_msm_step = time.perf_counter()
 
-        bank_dev = device if (device.type == "cuda" and total_tiles <= 1200) else torch.device("cpu")
-        bank_host = torch.empty((total_tiles, num_patches, embed_dim), dtype=torch.float16, device=bank_dev)
+    bank_dev = device if (device.type == "cuda" and total_tiles <= 1200) else torch.device("cpu")
+    bank_host = torch.empty((total_tiles, num_patches, embed_dim), dtype=torch.float16, device=bank_dev)
 
-        t_bank_prep = time.perf_counter()
-        if r == 1:
-            for b_step, b_s in enumerate(range(0, total_tiles, 128), 1):
-                b_e = min(total_tiles, b_s + 128)
-                normed = F.normalize(layer_raw_buf[b_s:b_e].to(device).float(), dim=-1).half()
-                bank_host[b_s:b_e].copy_(normed)
-                del normed
-                if b_step == 1 or b_step % 50 == 0 or b_e == total_tiles:
-                    _print_inline_progress(
-                        stage_title=f"Step 2.2a 建立特徵庫 (L{l_idx}/r={r})",
-                        current=b_e,
-                        total=total_tiles,
-                        start_t=t_bank_prep,
-                        extra_info=f"batch={b_step}",
-                    )
-        else:
-            for b_step, b_s in enumerate(range(0, total_tiles, 64), 1):
-                b_e = min(total_tiles, b_s + 64)
-                sub_2d = (
-                    layer_raw_buf[b_s:b_e].to(device).float()
-                    .transpose(1, 2).reshape(b_e - b_s, embed_dim, grid_hw, grid_hw)
-                )
-                agg_2d = F.avg_pool2d(sub_2d, kernel_size=r, stride=1, padding=r // 2)
-                agg_flat = agg_2d.flatten(2).transpose(1, 2)
-                normed = F.normalize(agg_flat, dim=-1).half()
-                bank_host[b_s:b_e].copy_(normed)
-                del sub_2d, agg_2d, agg_flat, normed
-                if b_step == 1 or b_step % 50 == 0 or b_e == total_tiles:
-                    _print_inline_progress(
-                        stage_title=f"Step 2.2a 建立特徵庫 (L{l_idx}/r={r})",
-                        current=b_e,
-                        total=total_tiles,
-                        start_t=t_bank_prep,
-                        extra_info=f"batch={b_step}",
-                    )
+    # 1. 原論文 SNAMD: 融合 r_list 多尺度 SWPooling 特徵並壓縮回 embed_dim（免跑 3 次 MSM，提速 3x）
+    t_bank_prep = time.perf_counter()
+    prep_bs = 16 if any(r > 1 for r in r_list) else 128
+    for b_step, b_s in enumerate(range(0, total_tiles, prep_bs), 1):
+        b_e = min(total_tiles, b_s + prep_bs)
+        raw_norm = F.normalize(layer_raw_buf[b_s:b_e].to(device).float(), dim=-1)
+        sub_2d = raw_norm.transpose(1, 2).reshape(b_e - b_s, embed_dim, grid_hw, grid_hw)
 
-        t_msm_q_start = time.perf_counter()
-        for q_step, q_start in enumerate(range(0, total_tiles, msm_chunk_size), 1):
-            q_end = min(total_tiles, q_start + msm_chunk_size)
-            q_feat = bank_host[q_start:q_end].to(device)
-            b_q = q_end - q_start
-
-            q_parents = parent_ids_tensor[q_start:q_end].unsqueeze(1)
-            valid_peer_mask = (parent_ids_tensor.unsqueeze(0) != q_parents)
-            if not torch.any(valid_peer_mask):
-                self_indices = torch.arange(q_start, q_end).unsqueeze(1)
-                valid_peer_mask = (torch.arange(total_tiles).unsqueeze(0) != self_indices)
-
-            if max_peer_tiles > 0 and total_tiles > max_peer_tiles:
-                peer_indices = torch.randperm(total_tiles)[:max_peer_tiles]
-                sub_bank_t = bank_host[peer_indices].to(device).transpose(1, 2).contiguous()
-                sub_mask = valid_peer_mask[:, peer_indices].to(device)
+        fused = torch.zeros_like(raw_norm)
+        for r in r_list:
+            if r == 1:
+                fused += raw_norm
             else:
-                sub_bank_t = bank_host.to(device).transpose(1, 2).contiguous()
-                sub_mask = valid_peer_mask.to(device)
+                fused += _swpooling_2d(sub_2d, r=r)
+        fused /= float(len(r_list))
 
-            num_sub_peers = sub_bank_t.shape[0]
-            peer_step = 64 if device.type == "cuda" else 32
-            min_dist_chunks = []
-            for p_s in range(0, num_sub_peers, peer_step):
-                p_e = min(num_sub_peers, p_s + peer_step)
-                sim_chunk = torch.einsum("qic,mcj->qmij", q_feat, sub_bank_t[p_s:p_e])
-                min_dist_chunks.append((1.0 - sim_chunk.max(dim=-1).values).float())
-                del sim_chunk
+        normed = F.normalize(fused, dim=-1).half()
+        bank_host[b_s:b_e].copy_(normed)
+        del raw_norm, sub_2d, fused, normed
 
-            min_dist_per_peer = torch.cat(min_dist_chunks, dim=1)
-            del min_dist_chunks, sub_bank_t
+        if b_step == 1 or b_step % 50 == 0 or b_e == total_tiles:
+            _print_inline_progress(
+                stage_title=f"Step 2.2a SNAMD 多尺度融合 (L{l_idx}, r={r_list})",
+                current=b_e,
+                total=total_tiles,
+                start_t=t_bank_prep,
+                extra_info=f"batch={b_step}",
+            )
 
-            invalid_mask_3d = (~sub_mask).unsqueeze(-1).expand_as(min_dist_per_peer)
-            min_dist_per_peer = min_dist_per_peer.masked_fill(invalid_mask_3d, float("inf"))
+    # 2. 原論文 MSM: 每層只需執行 1 次跨片互評
+    t_msm_q_start = time.perf_counter()
+    for q_step, q_start in enumerate(range(0, total_tiles, msm_chunk_size), 1):
+        q_end = min(total_tiles, q_start + msm_chunk_size)
+        q_feat = bank_host[q_start:q_end].to(device)
+        b_q = q_end - q_start
 
-            sorted_dists, _ = torch.sort(min_dist_per_peer, dim=1)
-            valid_counts = sub_mask.sum(dim=1).clamp(min=1)
-            for bi in range(b_q):
-                v_cnt = int(valid_counts[bi].item())
-                k_take = max(1, int(round(v_cnt * mutual_ratio)))
-                k_take = min(k_take, v_cnt)
-                score_bi = sorted_dists[bi, :k_take, :].mean(dim=0)
-                patch_scores_accum[q_start + bi] += score_bi.cpu() / float(num_combos)
-            del min_dist_per_peer, sorted_dists
+        q_parents = parent_ids_tensor[q_start:q_end].unsqueeze(1)
+        valid_peer_mask = (parent_ids_tensor.unsqueeze(0) != q_parents)
+        if not torch.any(valid_peer_mask):
+            self_indices = torch.arange(q_start, q_end).unsqueeze(1)
+            valid_peer_mask = (torch.arange(total_tiles).unsqueeze(0) != self_indices)
 
-            if q_step == 1 or q_step % 50 == 0 or q_end == total_tiles:
-                _print_inline_progress(
-                    stage_title=f"Step 2.2b 互評 (L{l_idx}/r={r}, {combo_idx}/{num_combos})",
-                    current=q_end,
-                    total=total_tiles,
-                    start_t=t_msm_q_start,
-                    extra_info=f"batch={q_step}",
-                )
+        if max_peer_tiles > 0 and total_tiles > max_peer_tiles:
+            peer_indices = torch.randperm(total_tiles)[:max_peer_tiles]
+            sub_bank_t = bank_host[peer_indices].to(device).transpose(1, 2).contiguous()
+            sub_mask = valid_peer_mask[:, peer_indices].to(device)
+        else:
+            sub_bank_t = bank_host.to(device).transpose(1, 2).contiguous()
+            sub_mask = valid_peer_mask.to(device)
 
-        del bank_host
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
+        num_sub_peers = sub_bank_t.shape[0]
+        peer_step = 64 if device.type == "cuda" else 32
+        min_dist_chunks = []
+        for p_s in range(0, num_sub_peers, peer_step):
+            p_e = min(num_sub_peers, p_s + peer_step)
+            sim_chunk = torch.einsum("qic,mcj->qmij", q_feat, sub_bank_t[p_s:p_e])
+            min_dist_chunks.append((1.0 - sim_chunk.max(dim=-1).values).float())
+            del sim_chunk
 
-        _print_inline_progress(
-            stage_title="Step 2.2 MuSc-V2 互評總進度 (MSM)",
-            current=combo_idx,
-            total=num_combos,
-            start_t=t_total_infer_start,
-            extra_info=f"Layer={l_idx}, r={r} ({time.perf_counter() - t_msm_step:.1f}s)",
-        )
+        min_dist_per_peer = torch.cat(min_dist_chunks, dim=1)
+        del min_dist_chunks, sub_bank_t
+
+        invalid_mask_3d = (~sub_mask).unsqueeze(-1).expand_as(min_dist_per_peer)
+        min_dist_per_peer = min_dist_per_peer.masked_fill(invalid_mask_3d, float("inf"))
+
+        sorted_dists, _ = torch.sort(min_dist_per_peer, dim=1)
+        valid_counts = sub_mask.sum(dim=1).clamp(min=1)
+        for bi in range(b_q):
+            v_cnt = int(valid_counts[bi].item())
+            k_take = max(1, int(round(v_cnt * mutual_ratio)))
+            k_take = min(k_take, v_cnt)
+            score_bi = sorted_dists[bi, :k_take, :].mean(dim=0)
+            patch_scores_accum[q_start + bi] += score_bi.cpu() / float(num_layers_to_run)
+        del min_dist_per_peer, sorted_dists
+
+        if q_step == 1 or q_step % 50 == 0 or q_end == total_tiles:
+            _print_inline_progress(
+                stage_title=f"Step 2.2b 互評 (L{l_idx}, {layer_step}/{num_layers_to_run})",
+                current=q_end,
+                total=total_tiles,
+                start_t=t_msm_q_start,
+                extra_info=f"batch={q_step}",
+            )
+
+    del bank_host
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
+    _print_inline_progress(
+        stage_title="Step 2.2 MuSc-V2 互評總進度 (MSM)",
+        current=layer_step,
+        total=num_layers_to_run,
+        start_t=t_total_infer_start,
+        extra_info=f"Layer={l_idx} ({time.perf_counter() - t_msm_step:.1f}s)",
+    )
 
 
 @torch.inference_mode()
@@ -1219,6 +1250,7 @@ def run_muscv2_zero_shot_inference(
     - 開啟 TF32 + cuDNN benchmark + AMP (bf16/fp16) + ThreadPoolExecutor 多執行緒讀圖與 Pin Memory。
     - 智慧單次 Forward 機制：若可用 RAM 足夠同時暫存全部目標層，僅執行 1 次 Backbone Forward Pass（提速 4 倍）；
       若 RAM 不足則自動退回單層串流防爆模式。
+    - 完整實作原論文 SNAMD (SWPooling) 與 RsCon (倒數第二層最高分 Patch + k=7 WMO)。
     - 輸出原生解析度 (grid_hw x grid_hw) float32 .npy，磁碟寫入量縮小 ~180 倍且零精度損失。
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1274,7 +1306,7 @@ def run_muscv2_zero_shot_inference(
     mode_desc = "高解析度大圖切塊互評" if manifest.get("large_img_count", 0) > 0 else "整張原圖直接互評 (Full-Image)"
     log_and_print(
         f"\n[Step 2 — MuSc-V2 Zero-Shot 互評推理 ({mode_desc})] Device={device} | Units={total_tiles} | "
-        f"Layers={use_layers} | r_list={r_list} | Mutual_Ratio={mutual_ratio:.2f} | RsCon={rscon_weight:.2f}\n"
+        f"Layers={use_layers} | r_list={r_list} (SWPooling) | Mutual_Ratio={mutual_ratio:.2f} | RsCon={'ON(k=7)' if rscon_weight > 0 else 'OFF'}\n"
         f"   ↳ 加速配置: BatchSize={infer_batch_size} | I/O Workers={num_workers} | "
         f"AMP={amp_str if use_amp else 'off'} | NativeFloat32Npy=ON | {extract_mode_str}",
         log_files,
@@ -1294,8 +1326,9 @@ def run_muscv2_zero_shot_inference(
         rgb = load_image_rgb_uint8(rec["tile_path"])
         return transform(Image.fromarray(rgb))
 
-    global_feats_accum = torch.zeros((total_tiles, embed_dim), dtype=torch.float32, device="cpu")
     patch_scores_accum = torch.zeros((total_tiles, num_patches), dtype=torch.float32, device="cpu")
+    penultimate_step = max(1, num_layers_to_run - 1)
+    salient_feats = torch.zeros((total_tiles, embed_dim), dtype=torch.float32, device="cpu")
     parent_ids_tensor = torch.tensor([r["parent_idx"] for r in tile_records], dtype=torch.long)
 
     num_combos = num_layers_to_run * len(r_list)
@@ -1336,8 +1369,6 @@ def run_muscv2_zero_shot_inference(
                 for slot_i in range(num_layers_to_run):
                     tok = hook_holder[slot_i].float()
                     patch_tok = tok[:, -num_patches:, :]
-                    g_batch = F.normalize(patch_tok.mean(dim=1), dim=-1).cpu()
-                    global_feats_accum[start_i:end_i] += g_batch / float(num_layers_to_run)
                     all_layer_bufs[slot_i][start_i:end_i].copy_(patch_tok.to(dtype=torch.float16, device="cpu"))
                     del tok, patch_tok
                 del x_batch
@@ -1371,12 +1402,15 @@ def run_muscv2_zero_shot_inference(
                 parent_ids_tensor=parent_ids_tensor,
                 mutual_ratio=mutual_ratio,
                 max_peer_tiles=max_peer_tiles,
-                num_combos=num_combos,
+                num_layers_to_run=num_layers_to_run,
                 msm_chunk_size=msm_chunk_size,
                 device=device,
                 patch_scores_accum=patch_scores_accum,
                 t_total_infer_start=t_total_infer_start,
             )
+            if layer_step == penultimate_step:
+                max_p_idx = patch_scores_accum.argmax(dim=1)
+                salient_feats.copy_(cur_buf[torch.arange(total_tiles), max_p_idx].float())
             all_layer_bufs[layer_step - 1] = None
             del cur_buf
             gc.collect()
@@ -1410,8 +1444,6 @@ def run_muscv2_zero_shot_inference(
 
                     tok = hook_holder["feat"].float()
                     patch_tok = tok[:, -num_patches:, :]
-                    g_batch = F.normalize(patch_tok.mean(dim=1), dim=-1).cpu()
-                    global_feats_accum[start_i:end_i] += g_batch / float(num_layers_to_run)
                     layer_raw_buf[start_i:end_i].copy_(patch_tok.to(dtype=torch.float16, device=storage_device))
                     del x_batch, tok, patch_tok
                     hook_holder.clear()
@@ -1440,34 +1472,37 @@ def run_muscv2_zero_shot_inference(
                     parent_ids_tensor=parent_ids_tensor,
                     mutual_ratio=mutual_ratio,
                     max_peer_tiles=max_peer_tiles,
-                    num_combos=num_combos,
+                    num_layers_to_run=num_layers_to_run,
                     msm_chunk_size=msm_chunk_size,
                     device=device,
                     patch_scores_accum=patch_scores_accum,
                     t_total_infer_start=t_total_infer_start,
                 )
+                if layer_step == penultimate_step:
+                    max_p_idx = patch_scores_accum.argmax(dim=1).to(storage_device)
+                    t_idx = torch.arange(total_tiles, device=storage_device)
+                    salient_feats.copy_(layer_raw_buf[t_idx, max_p_idx].float().cpu())
         del layer_raw_buf
 
     gc.collect()
-    global_feats_all = F.normalize(global_feats_accum, dim=-1)
+    salient_feats_all = F.normalize(salient_feats, dim=-1)
     raw_tile_max = patch_scores_accum.max(dim=1).values
     rscon_scale = torch.ones(total_tiles, dtype=torch.float32)
 
     if rscon_weight > 0 and total_tiles > 2:
-        g_sim = torch.mm(global_feats_all, global_feats_all.t())
+        # 原論文 Eq. (14)-(17): W = F_i · F_j, WMO 取 k=7 最近鄰並以 0.5/0.5 加權重評
+        w_sim = torch.mm(salient_feats_all, salient_feats_all.t())
         same_parent = (parent_ids_tensor.unsqueeze(1) == parent_ids_tensor.unsqueeze(0))
         if not torch.all(same_parent):
-            g_sim = g_sim.masked_fill(same_parent, -1e4)
+            w_sim = w_sim.masked_fill(same_parent, -1e4)
         else:
-            g_sim.fill_diagonal_(-1e4)
-        k_nbr = min(max(3, int(round(total_tiles * 0.15))), total_tiles - 1)
-        top_sim, top_idx = torch.topk(g_sim, k=k_nbr, dim=1)
-        nbr_weights = F.softmax(top_sim * 10.0, dim=1)
+            w_sim.fill_diagonal_(-1e4)
+        k_nbr = min(7, total_tiles - 1)
+        top_w, top_idx = torch.topk(w_sim, k=k_nbr, dim=1)
+        top_w = torch.clamp(top_w, min=1e-6)
+        norm_w = top_w / top_w.sum(dim=1, keepdim=True)
         nbr_scores = raw_tile_max[top_idx]
-        expected_baseline = (nbr_weights * nbr_scores).sum(dim=1)
-        global_med_baseline = float(torch.median(raw_tile_max).item())
-        excess_shift = torch.clamp(expected_baseline - global_med_baseline, min=0.0)
-        calibrated_max = torch.clamp(raw_tile_max - rscon_weight * excess_shift, min=0.0)
+        calibrated_max = 0.5 * raw_tile_max + 0.5 * (norm_w * nbr_scores).sum(dim=1)
         rscon_scale = calibrated_max / torch.clamp(raw_tile_max, min=1e-6)
 
     # 直接以原生解析度 (grid_hw x grid_hw) float32 存檔，單塊僅 ~5.5 KB，寫入量縮小 ~180 倍且零精度損失
@@ -1477,7 +1512,7 @@ def run_muscv2_zero_shot_inference(
         amap = (amap_2d_all[idx] * float(rscon_scale[idx].item())).astype(np.float32)
         np.save(os.path.join(tile_amap_dir, f"{rec['tile_stem']}.npy"), amap)
 
-    del model, patch_scores_accum, amap_2d_all, global_feats_accum
+    del model, patch_scores_accum, amap_2d_all, salient_feats
     if device.type == "cuda":
         torch.cuda.empty_cache()
     gc.collect()
@@ -1810,36 +1845,6 @@ def compute_dynamic_effective_threshold(
         f"           └─ Top 3% (P97) 參考 : {top3_cut_info}"
     )
     return thresh_top5, desc
-
-    if thresh_3sigma <= thresh_mod_z:
-        eff_thresh, eff_name = thresh_3sigma, "3-Sigma (mean+3*std)"
-        high_thresh, high_name = thresh_mod_z, "Modified Z-Score (3.5)"
-    else:
-        eff_thresh, eff_name = thresh_mod_z, "Modified Z-Score (3.5)"
-        high_thresh, high_name = thresh_3sigma, "3-Sigma (mean+3*std)"
-
-    eff_count = int(np.sum(scores_arr >= eff_thresh))
-    eff_pct = (eff_count / total_n) * 100.0
-    high_count = int(np.sum(scores_arr >= high_thresh))
-    high_pct = (high_count / total_n) * 100.0
-    high_percentile = float(np.mean(scores_arr < high_thresh) * 100.0)
-
-    if high_count == 0:
-        high_cut_info = f"高於全體最高分 ({float(np.max(scores_arr)):.4f})，切出 0 張 (0.00%)"
-    else:
-        high_cut_info = (
-            f"切在 Rank {high_count}/{total_n} 之後 "
-            f"(共 {high_count} 張 >= 該門檻, 佔 {high_pct:.2f}%, 約 P{high_percentile:.2f})"
-        )
-
-    desc = (
-        f"Min(3-Sigma, Mod-Z) 採用 [{eff_name}] = {eff_thresh:.4f} "
-        f"(切出 {eff_count}/{total_n} 張, {eff_pct:.2f}%)\n"
-        f"           ├─ 3-Sigma (Shewhart 1931)         : {thresh_3sigma:.4f} (Mean={mean_val:.4f}, Std={std_val:.4f})\n"
-        f"           ├─ Modified Z-Score (Iglewicz 1993): {thresh_mod_z:.4f} (Median={med_val:.4f}, MAD={mad_val:.4f})\n"
-        f"           └─ 較高門檻 [{high_name}] = {high_thresh:.4f} -> {high_cut_info}"
-    )
-    return float(eff_thresh), desc
 
 
 def compute_blind_pool_eval_metrics(ranking_records: List[Dict]) -> Optional[Dict[str, float]]:
@@ -2428,7 +2433,7 @@ def main():
     parser.add_argument("--r_list", type=str, default="1,3,5", help="MuSc-V2 局部鄰域聚合尺度清單 (例如 1,3,5)")
     parser.add_argument("--feature_layers", type=str, default="", help="指定提取的 Transformer 層數 (留空自動依骨幹深度配置)")
     parser.add_argument("--mutual_ratio", type=float, default=0.30, help="MuSc-V2 互評機制取最低距離的比例 (預設 0.30 即 30%%)")
-    parser.add_argument("--rscon_weight", type=float, default=0.15, help="MuSc-V2 RsCon 全域鄰域重評校準權重 (0 則關閉)")
+    parser.add_argument("--rscon_weight", type=float, default=0.15, help="MuSc-V2 RsCon 全域鄰域重評開關 (>0 啟用原論文 k=7 WMO，0 關閉)")
     parser.add_argument("--max_peer_tiles", type=int, default=400, help="大盲池互評時每個 Query 最多抽樣比較的他片圖塊數")
 
     # 門檻與動態對齊參數
