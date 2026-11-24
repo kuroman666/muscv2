@@ -1094,14 +1094,23 @@ def _run_msm_for_single_layer(
         bank_dev = device if (device.type == "cuda" and total_tiles <= 1200) else torch.device("cpu")
         bank_host = torch.empty((total_tiles, num_patches, embed_dim), dtype=torch.float16, device=bank_dev)
 
+        t_bank_prep = time.perf_counter()
         if r == 1:
-            for b_s in range(0, total_tiles, 128):
+            for b_step, b_s in enumerate(range(0, total_tiles, 128), 1):
                 b_e = min(total_tiles, b_s + 128)
                 normed = F.normalize(layer_raw_buf[b_s:b_e].to(device).float(), dim=-1).half()
                 bank_host[b_s:b_e].copy_(normed)
                 del normed
+                if b_step == 1 or b_step % 50 == 0 or b_e == total_tiles:
+                    _print_inline_progress(
+                        stage_title=f"Step 2.2a 建立特徵庫 (L{l_idx}/r={r})",
+                        current=b_e,
+                        total=total_tiles,
+                        start_t=t_bank_prep,
+                        extra_info=f"batch={b_step}",
+                    )
         else:
-            for b_s in range(0, total_tiles, 64):
+            for b_step, b_s in enumerate(range(0, total_tiles, 64), 1):
                 b_e = min(total_tiles, b_s + 64)
                 sub_2d = (
                     layer_raw_buf[b_s:b_e].to(device).float()
@@ -1112,8 +1121,17 @@ def _run_msm_for_single_layer(
                 normed = F.normalize(agg_flat, dim=-1).half()
                 bank_host[b_s:b_e].copy_(normed)
                 del sub_2d, agg_2d, agg_flat, normed
+                if b_step == 1 or b_step % 50 == 0 or b_e == total_tiles:
+                    _print_inline_progress(
+                        stage_title=f"Step 2.2a 建立特徵庫 (L{l_idx}/r={r})",
+                        current=b_e,
+                        total=total_tiles,
+                        start_t=t_bank_prep,
+                        extra_info=f"batch={b_step}",
+                    )
 
-        for q_start in range(0, total_tiles, msm_chunk_size):
+        t_msm_q_start = time.perf_counter()
+        for q_step, q_start in enumerate(range(0, total_tiles, msm_chunk_size), 1):
             q_end = min(total_tiles, q_start + msm_chunk_size)
             q_feat = bank_host[q_start:q_end].to(device)
             b_q = q_end - q_start
@@ -1157,12 +1175,21 @@ def _run_msm_for_single_layer(
                 patch_scores_accum[q_start + bi] += score_bi.cpu() / float(num_combos)
             del min_dist_per_peer, sorted_dists
 
+            if q_step == 1 or q_step % 50 == 0 or q_end == total_tiles:
+                _print_inline_progress(
+                    stage_title=f"Step 2.2b 互評 (L{l_idx}/r={r}, {combo_idx}/{num_combos})",
+                    current=q_end,
+                    total=total_tiles,
+                    start_t=t_msm_q_start,
+                    extra_info=f"batch={q_step}",
+                )
+
         del bank_host
         if device.type == "cuda":
             torch.cuda.empty_cache()
 
         _print_inline_progress(
-            stage_title="Step 2.2 MuSc-V2 互評 (MSM)",
+            stage_title="Step 2.2 MuSc-V2 互評總進度 (MSM)",
             current=combo_idx,
             total=num_combos,
             start_t=t_total_infer_start,
