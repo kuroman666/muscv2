@@ -1,8 +1,9 @@
 # 檔案位置: MuSc-V2/1_infer_muscv2_no_gt.py
-# 用途: MuSc-V2 Training-Free & Zero-Shot 無損加速版 (完整還原原論文 SNAMD SWPooling + RsCon k=7 WMO)
-# (GPU端: 高Batch/TF32/AMP/多執行緒預讀 + RAM充足時單次Forward收齊全部層；
-#  I/O端: 原生解析度float32 .npy + 無壓縮PNG + 圓心座標快取；
-#  後處理端: 1024x1024降維畫布 + ProcessPoolExecutor多核心平行縫合濾波 + 僅異常圖映回1:1原圖畫框)
+# 用途: MuSc-V2 Training-Free & Zero-Shot 無損加速版
+# (Step 0: 以第一張圖為準自動對齊旋轉方向；
+#  Step 1: 圓形預遮罩 + 平行切塊 + 圓心與旋轉角快取；
+#  Step 2: Position-wise 同座標 SNAMD SWPooling + MSM + 全晶圓級 RsCon k=7 WMO；
+#  Step 3: 1024px 降維縫合濾波 + 熱力圖逆向轉回原圖方向 + 1:1 原圖畫框)
 import os
 import re
 import gc
@@ -261,6 +262,100 @@ def prepare_mock_unlabeled_pool_from_mvtec(
 
 
 # =====================================================================
+# Step 0: 影像方向自動對齊模組 (以資料集第一張圖為準，並支援 Step 3 逆向轉回)
+# =====================================================================
+
+def _build_align_template(img_rgb: np.ndarray, size: int = 256) -> Tuple[np.ndarray, np.ndarray]:
+    """將影像降採樣為 (size x size) 灰階並建立內接圓遮罩，用於穩健計算旋轉對齊角。"""
+    gray = cv2.cvtColor(cv2.resize(img_rgb, (size, size), interpolation=cv2.INTER_AREA), cv2.COLOR_RGB2GRAY)
+    gray_f = cv2.GaussianBlur(gray.astype(np.float32), (5, 5), 0)
+    yy, xx = np.ogrid[:size, :size]
+    c = (size - 1) * 0.5
+    r = size * 0.46
+    circle_mask = ((yy - c) ** 2 + (xx - c) ** 2) <= (r ** 2)
+    vals = gray_f[circle_mask]
+    mean_v = float(np.mean(vals))
+    std_v = float(np.std(vals)) + 1e-6
+    norm_gray = np.zeros_like(gray_f, dtype=np.float32)
+    norm_gray[circle_mask] = (vals - mean_v) / std_v
+    return norm_gray, circle_mask
+
+
+def estimate_rotation_angle_to_ref(
+    img_rgb: np.ndarray,
+    ref_norm_gray: np.ndarray,
+    circle_mask: np.ndarray,
+    align_mode: str = "full360",
+) -> float:
+    """估測將 img_rgb 旋轉對齊至參考圖所需的逆時針角度 (度)。"""
+    mode = align_mode.lower().strip()
+    if mode == "off":
+        return 0.0
+
+    size = ref_norm_gray.shape[0]
+    cur_norm, _ = _build_align_template(img_rgb, size=size)
+    center = (size * 0.5, size * 0.5)
+    ref_vec = ref_norm_gray[circle_mask]
+
+    def _score_angle(deg: float) -> float:
+        if abs(deg) < 1e-6:
+            rot = cur_norm
+        else:
+            mat = cv2.getRotationMatrix2D(center, deg, 1.0)
+            rot = cv2.warpAffine(cur_norm, mat, (size, size), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
+        return float(np.dot(rot[circle_mask], ref_vec))
+
+    if mode == "discrete90":
+        candidates = [0.0, 90.0, 180.0, 270.0]
+        best_ang = max(candidates, key=_score_angle)
+        return float(best_ang)
+
+    # full360: 粗搜 (每 5 度，含 0/90/180/270) + 精搜 (±5 度內每 0.5 度)
+    coarse_angles = [float(a) for a in range(0, 360, 5)]
+    best_coarse = max(coarse_angles, key=_score_angle)
+
+    fine_angles = [best_coarse + 0.5 * k for k in range(-10, 11)]
+    best_fine = max(fine_angles, key=_score_angle) % 360.0
+
+    # 若接近 0 度 (±0.5° 內) 則直接歸零，避免無意義的雙線性插值
+    if best_fine <= 0.5 or best_fine >= 359.5:
+        return 0.0
+    return float(best_fine)
+
+
+def rotate_image_or_amap(
+    arr: np.ndarray,
+    angle_deg: float,
+    border_value=0,
+    is_amap: bool = False,
+) -> np.ndarray:
+    """以影像中心旋轉圖片或熱力圖 (正值為逆時針，負值為順時針逆轉回原圖)。"""
+    if abs(angle_deg) < 1e-3:
+        return arr
+    h, w = arr.shape[:2]
+    mat = cv2.getRotationMatrix2D((w * 0.5, h * 0.5), float(angle_deg), 1.0)
+    interp = cv2.INTER_LINEAR
+    if is_amap:
+        return cv2.warpAffine(
+            arr.astype(np.float32), mat, (w, h),
+            flags=interp, borderMode=cv2.BORDER_CONSTANT, borderValue=float(border_value),
+        )
+    bv = (int(border_value), int(border_value), int(border_value)) if arr.ndim == 3 else int(border_value)
+    return cv2.warpAffine(
+        arr, mat, (w, h),
+        flags=interp, borderMode=cv2.BORDER_CONSTANT, borderValue=bv,
+    )
+
+def rotate_point_xy(cx: float, cy: float, w: int, h: int, angle_deg: float) -> Tuple[float, float]:
+    """將原圖圓心 (cx, cy) 依相同旋轉矩陣映射至旋轉後的新座標。"""
+    if abs(angle_deg) < 1e-3:
+        return float(cx), float(cy)
+    mat = cv2.getRotationMatrix2D((w * 0.5, h * 0.5), float(angle_deg), 1.0)
+    nx = mat[0, 0] * cx + mat[0, 1] * cy + mat[0, 2]
+    ny = mat[1, 0] * cx + mat[1, 1] * cy + mat[1, 2]
+    return float(nx), float(ny)
+
+# =====================================================================
 # 圓心偵測模組 (支援直接從記憶體 RGB 陣列偵測並快取，免去 Step 3 重複讀大圖)
 # =====================================================================
 
@@ -452,7 +547,6 @@ def run_mask_preview(
         )
         stats_list.append((w, h, cx, cy, r_raw, r_mask, use_circle))
 
-        # 左圖：紅圈=原始半徑、綠圈=套用 margin 後實際遮罩半徑、黃十字=圓心；右圖：遮罩後結果
         orig_bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         masked_bgr = cv2.cvtColor(masked_rgb, cv2.COLOR_RGB2BGR)
         thick = max(2, int(round(max(h, w) / 400)))
@@ -500,27 +594,13 @@ def run_mask_preview(
         f" [📐 抽樣中位數幾何統計 (原圖約 {med_w:.0f}x{med_h:.0f})]\n"
         f"    • 像素值 : cx={med_cx:.1f}, cy={med_cy:.1f}, raw_r={med_r_raw:.1f}, 實際 mask_r={med_r_mask:.1f}\n"
         f"    • 比例值 : cx={med_cx/med_w:.4f}, cy={med_cy/med_h:.4f}, raw_r={med_r_raw/min_side:.4f}, mask_r={med_r_mask/min_side:.4f}\n"
-        f"{'-' * 78}\n"
-        f" [📋 若綠圈大小滿意，請直接把以下參數貼進 run_inside_muscv2.sh 的參數區]\n"
-        f"    WAFER_EDGE_MODE=\"{wafer_edge_mode}\"\n"
-        f"    PRE_MASK=\"--pre_mask\"\n"
-        f"    PRE_MASK_MARGIN={pre_mask_margin:g}\n"
-        f"    PRE_MASK_FILL={fill_value}\n"
-        f"    MASK_CX={manual_cx:g}\n"
-        f"    MASK_CY={manual_cy:g}\n"
-        f"    MASK_R={manual_r:g}\n"
-        f"{'-' * 78}\n"
-        f" [🔧 若綠圈還不準，微調口訣]\n"
-        f"    • 綠圈切太裡面 (吃掉晶圓邊緣) -> 調小 PRE_MASK_MARGIN (可設負值如 -0.01) 或調大 MASK_R\n"
-        f"    • 綠圈切太外面 (留到背景雜訊) -> 調大 PRE_MASK_MARGIN (如 0.03) 或調小 MASK_R\n"
-        f"    • 黃十字圓心歪掉              -> 直接改用像素或比例指定 MASK_CX / MASK_CY (參考上方中位數)\n"
         f"{'=' * 78}"
     )
     log_and_print(rec_msg, log_files)
 
 
 # =====================================================================
-# 智慧解析度防呆平行切塊 (Resolution-Aware Parallel Tiling) 與無壓縮存檔模組
+# Step 0 + Step 1: 方向對齊與智慧解析度防呆平行切塊模組
 # =====================================================================
 
 def get_axis_positions(length: int, tile_size: int, stride: int) -> List[int]:
@@ -559,41 +639,27 @@ def estimate_safe_tiling_params(
     disable_tiling: bool,
     log_files: List[str],
 ) -> Tuple[int, int]:
-    """主記憶體 RAM 防爆保護器。"""
+    """主記憶體 RAM 防爆保護器 (已適配 Position-wise 同座標分批互評，單批上限為總圖片數 N)。"""
     if disable_tiling:
         return tile_size, tile_overlap
 
     avail_bytes = get_available_ram_bytes()
     bytes_per_tile = 37 * 37 * 1024 * 2
     max_safe_tiles = max(2000, int((avail_bytes * 0.55) / bytes_per_tile))
-    overlap_ratio = tile_overlap / max(1.0, float(tile_size))
-    cur_ts = tile_size
-    cur_ov = tile_overlap
+    if len(hw_list) <= max_safe_tiles:
+        return tile_size, tile_overlap
 
-    while cur_ts < 2048:
-        stride = max(1, cur_ts - cur_ov)
-        est_tiles = 0
-        for (h, w) in hw_list:
-            if max(h, w) >= min_tiling_res and (h > cur_ts or w > cur_ts):
-                est_tiles += len(get_axis_positions(h, cur_ts, stride)) * len(get_axis_positions(w, cur_ts, stride))
-            else:
-                est_tiles += 1
-        if est_tiles <= max_safe_tiles:
-            break
-        next_ts = cur_ts * 2
-        next_ov = int(round(next_ts * overlap_ratio))
-        log_and_print(
-            f"[🛡️ 記憶體防爆自動調節] 預估切塊數 ({est_tiles} 塊) 接近可用 RAM 上限 "
-            f"(Avail={avail_bytes / (1024**3):.1f} GiB, 安全上限≈{max_safe_tiles} 塊)，"
-            f"自動將切塊尺寸從 {cur_ts}x{cur_ts} 升級為 {next_ts}x{next_ts} (Overlap={next_ov})！",
-            log_files,
-        )
-        cur_ts, cur_ov = next_ts, next_ov
-    return cur_ts, cur_ov
+    log_and_print(
+        f"[⚠️ 記憶體提醒] 單一座標圖塊數 ({len(hw_list)}) 超過建議上限 ({max_safe_tiles})，"
+        f"推論階段將自動切換為單層串流省記憶體模式。",
+        log_files,
+    )
+    return tile_size, tile_overlap
 
 
-def _tile_single_image_worker(task_args: Tuple) -> Tuple[str, Dict, int, int]:
+def _tile_single_image_worker(task_args: Tuple) -> Tuple[str, Dict, int, int, float]:
     (
+        img_idx,
         fpath,
         h,
         w,
@@ -613,39 +679,53 @@ def _tile_single_image_worker(task_args: Tuple) -> Tuple[str, Dict, int, int]:
         manual_cx,
         manual_cy,
         manual_r,
+        align_mode,
+        ref_norm_gray,
+        ref_circle_mask,
     ) = task_args
     cv2.setNumThreads(1)
     abs_fpath = os.path.abspath(fpath)
     should_tile = (not disable_tiling) and (max(h, w) >= min_tiling_res) and (h > tile_size or w > tile_size)
+    do_align = (align_mode != "off") and (ref_norm_gray is not None) and (img_idx > 0)
 
     if not should_tile:
         tile_stem = f"{stem}__full_y0000_x0000_h{h:04d}_w{w:04d}"
         out_tile_path = abs_fpath
         out_tile_fname = os.path.basename(abs_fpath)
         wafer_geom_cache = None
+        align_angle = 0.0
 
-        if pre_mask:
+        if pre_mask or do_align:
             img = load_image_rgb_uint8(fpath)
-            use_circle, cy_f, cx_f, r_f = get_wafer_geometry(
-                img,
-                wafer_edge_mode=wafer_edge_mode,
-                category=category,
-                manual_cx=manual_cx,
-                manual_cy=manual_cy,
-                manual_r=manual_r,
-            )
-            img, _, _ = apply_circular_pre_mask(
-                img,
-                wafer_edge_mode=wafer_edge_mode,
-                category=category,
-                pre_mask_margin=pre_mask_margin,
-                fill_value=pre_mask_fill,
-                cached_geom=(use_circle, cy_f, cx_f, r_f),
-            )
-            out_tile_fname = f"{tile_stem}.png"
-            out_tile_path = os.path.abspath(os.path.join(tiled_pool_dir, out_tile_fname))
-            Image.fromarray(img).save(out_tile_path, format="PNG", compress_level=0)
-            wafer_geom_cache = [bool(use_circle), float(cy_f), float(cx_f), float(r_f)]
+            if pre_mask:
+                use_circle, cy_f, cx_f, r_f = get_wafer_geometry(
+                    img,
+                    wafer_edge_mode=wafer_edge_mode,
+                    category=category,
+                    manual_cx=manual_cx,
+                    manual_cy=manual_cy,
+                    manual_r=manual_r,
+                )
+                img, _, _ = apply_circular_pre_mask(
+                    img,
+                    wafer_edge_mode=wafer_edge_mode,
+                    category=category,
+                    pre_mask_margin=pre_mask_margin,
+                    fill_value=pre_mask_fill,
+                    cached_geom=(use_circle, cy_f, cx_f, r_f),
+                )
+                wafer_geom_cache = [bool(use_circle), float(cy_f), float(cx_f), float(r_f)]
+            if do_align:
+                align_angle = estimate_rotation_angle_to_ref(img, ref_norm_gray, ref_circle_mask, align_mode)
+                if abs(align_angle) > 1e-3:
+                    img = rotate_image_or_amap(img, align_angle, border_value=pre_mask_fill, is_amap=False)
+                    if wafer_geom_cache is not None:
+                        nx, ny = rotate_point_xy(wafer_geom_cache[2], wafer_geom_cache[1], w, h, align_angle)
+                        wafer_geom_cache[1], wafer_geom_cache[2] = ny, nx
+            if pre_mask or abs(align_angle) > 1e-3:
+                out_tile_fname = f"{tile_stem}.png"
+                out_tile_path = os.path.abspath(os.path.join(tiled_pool_dir, out_tile_fname))
+                Image.fromarray(img).save(out_tile_path, format="PNG", compress_level=0)
             del img
 
         tiles_info = [{
@@ -664,14 +744,16 @@ def _tile_single_image_worker(task_args: Tuple) -> Tuple[str, Dict, int, int]:
             "height": int(h),
             "width": int(w),
             "tiling_applied": False,
+            "align_angle": float(align_angle),
             "tiles": tiles_info,
         }
         if wafer_geom_cache is not None:
             entry["wafer_geom"] = wafer_geom_cache
-        return rel_fname, entry, 1, 0
+        return rel_fname, entry, 1, 0, float(align_angle)
 
     img = load_image_rgb_uint8(fpath)
-    # 順便在原圖已載入記憶體時快取圓心座標，Step 3 完全免重讀 5000x5000 原圖
+
+    # 先在未旋轉的原圖上偵測/套用圓形 Mask (100% 對齊 test_mask_muscv2.sh 的 MASK_CX / MASK_CY)
     use_circle, cy_f, cx_f, r_f = get_wafer_geometry(
         img,
         wafer_edge_mode=wafer_edge_mode,
@@ -690,6 +772,14 @@ def _tile_single_image_worker(task_args: Tuple) -> Tuple[str, Dict, int, int]:
             cached_geom=(use_circle, cy_f, cx_f, r_f),
         )
 
+    # Step 0: 旋轉對齊第一張圖的方向，並同步旋轉圓心座標供 Step 3 邊緣抑制使用
+    align_angle = 0.0
+    if do_align:
+        align_angle = estimate_rotation_angle_to_ref(img, ref_norm_gray, ref_circle_mask, align_mode)
+        if abs(align_angle) > 1e-3:
+            img = rotate_image_or_amap(img, align_angle, border_value=pre_mask_fill, is_amap=False)
+            cx_f, cy_f = rotate_point_xy(cx_f, cy_f, w, h, align_angle)
+
     ys = get_axis_positions(h, tile_size, stride)
     xs = get_axis_positions(w, tile_size, stride)
     tiles_info = []
@@ -705,7 +795,6 @@ def _tile_single_image_worker(task_args: Tuple) -> Tuple[str, Dict, int, int]:
             tile_stem = f"{stem}__tile_y{y:04d}_x{x:04d}_h{ch:04d}_w{cw:04d}"
             tile_fname = f"{tile_stem}.png"
             tile_out_path = os.path.join(tiled_pool_dir, tile_fname)
-            # 取消 zlib 壓縮 (compress_level=0) 大幅降低切塊寫檔耗時
             Image.fromarray(crop).save(tile_out_path, format="PNG", compress_level=0)
             tiles_info.append({
                 "tile_stem": tile_stem,
@@ -744,10 +833,11 @@ def _tile_single_image_worker(task_args: Tuple) -> Tuple[str, Dict, int, int]:
         "height": int(h),
         "width": int(w),
         "tiling_applied": True,
+        "align_angle": float(align_angle),
         "wafer_geom": [bool(use_circle), float(cy_f), float(cx_f), float(r_f)],
         "tiles": tiles_info,
     }
-    return rel_fname, entry, len(tiles_info), skipped_bg
+    return rel_fname, entry, len(tiles_info), skipped_bg, float(align_angle)
 
 
 def prepare_tiled_test_pool(
@@ -772,8 +862,9 @@ def prepare_tiled_test_pool(
     manual_cx: float = -1.0,
     manual_cy: float = -1.0,
     manual_r: float = -1.0,
+    align_mode: str = "full360",
 ) -> Dict:
-    """遞迴搜尋測試盲池中的所有圖片，執行大圖防呆判定與多核心平行切塊。"""
+    """Step 0 (對齊第一張方向) + Step 1 (大圖防呆判定與多核心平行切塊)。"""
     safe_rmtree(tiled_pool_dir)
     img_paths = scan_pool_images(pool_dir)
     if not img_paths:
@@ -799,6 +890,19 @@ def prepare_tiled_test_pool(
         if (not disable_tiling) and (max(h, w) >= min_tiling_res) and (h > tile_size or w > tile_size)
     )
 
+    # Step 0: 以第一張圖建立旋轉對齊參考模板
+    ref_norm_gray, ref_circle_mask = None, None
+    if align_mode != "off":
+        os.makedirs(tiled_pool_dir, exist_ok=True)
+        ref_rgb = load_image_rgb_uint8(img_paths[0])
+        ref_norm_gray, ref_circle_mask = _build_align_template(ref_rgb, size=256)
+        del ref_rgb
+        log_and_print(
+            f"\n[Step 0 — 方向自動對齊已啟用 ({align_mode})] 基準圖: {os.path.basename(img_paths[0])} "
+            f"-> 其餘 {len(img_paths) - 1} 張將先對齊基準圖方向再切塊，最終輸出時自動逆轉回原圖角度！",
+            log_files,
+        )
+
     if disable_tiling:
         guardrail_msg = (
             f"[🛡️ 防呆檢測 — 已手動關閉切塊 (--disable_tiling)] "
@@ -816,7 +920,7 @@ def prepare_tiled_test_pool(
             f"[🛡️ 防呆檢測 — 偵測到高解析度大圖，自動啟用平行切塊] "
             f"盲池解析度範圍: {min_res}~{max_res}px (中位數={med_res}px) >= 大圖門檻 ({min_tiling_res}px)。\n"
             f"   ↳ 共 {large_img_count}/{len(img_paths)} 張大圖將執行 {tile_size}x{tile_size} (Overlap={tile_overlap}) "
-            f"高解析度重疊切塊 (Workers={num_workers}, 無壓縮 PNG + 圓心快取)！"
+            f"高解析度重疊切塊 (Workers={num_workers}, 無壓縮 PNG + 圓心與旋轉角快取)！"
         )
     if pre_mask:
         os.makedirs(tiled_pool_dir, exist_ok=True)
@@ -833,70 +937,79 @@ def prepare_tiled_test_pool(
         "tile_overlap": tile_overlap,
         "min_tiling_res": min_tiling_res,
         "large_img_count": large_img_count,
+        "align_mode": align_mode,
+        "align_ref_image": os.path.basename(img_paths[0]),
         "images": {},
     }
 
     tasks = []
-    for fpath, (h, w) in zip(img_paths, hw_list):
+    for img_idx, (fpath, (h, w)) in enumerate(zip(img_paths, hw_list)):
         rel_fname = os.path.relpath(fpath, pool_dir).replace("\\", "/")
         rel_no_ext = os.path.splitext(rel_fname)[0]
         stem = re.sub(r"[\\/]+", "__", rel_no_ext)
         tasks.append((
-            fpath, h, w, rel_fname, stem, tiled_pool_dir,
+            img_idx, fpath, h, w, rel_fname, stem, tiled_pool_dir,
             tile_size, stride, min_tiling_res, bg_std_thresh,
             disable_tiling, wafer_edge_mode, category,
             pre_mask, pre_mask_margin, pre_mask_fill,
             manual_cx, manual_cy, manual_r,
+            align_mode, ref_norm_gray, ref_circle_mask,
         ))
 
     total_tiles = 0
     skipped_bg_tiles = 0
+    rotated_img_count = 0
     num_pool_imgs = len(tasks)
-    eff_workers = max(1, min(int(num_workers), num_pool_imgs)) if (large_img_count > 0 or pre_mask) else 1
+    eff_workers = max(1, min(int(num_workers), num_pool_imgs)) if (large_img_count > 0 or pre_mask or align_mode != "off") else 1
     t_tile_loop_start = time.perf_counter()
 
     ordered_results: Dict[str, Dict] = {}
     if eff_workers <= 1:
         for img_idx, t_args in enumerate(tasks, 1):
-            rel_fname, entry, n_t, n_skip = _tile_single_image_worker(t_args)
+            rel_fname, entry, n_t, n_skip, ang = _tile_single_image_worker(t_args)
             ordered_results[rel_fname] = entry
             total_tiles += n_t
             skipped_bg_tiles += n_skip
-            if large_img_count > 0 and (img_idx == 1 or img_idx % 5 == 0 or img_idx == num_pool_imgs):
+            if abs(ang) > 1e-3:
+                rotated_img_count += 1
+            if (large_img_count > 0 or align_mode != "off") and (img_idx == 1 or img_idx % 5 == 0 or img_idx == num_pool_imgs):
                 _print_inline_progress(
-                    stage_title="Step 1 大圖切塊準備",
+                    stage_title="Step 0+1 對齊與切塊",
                     current=img_idx,
                     total=num_pool_imgs,
                     start_t=t_tile_loop_start,
-                    extra_info=f"累計圖塊: {total_tiles} (略過背景: {skipped_bg_tiles})",
+                    extra_info=f"已旋轉={rotated_img_count} | 圖塊={total_tiles}",
                 )
     else:
         completed = 0
         with ProcessPoolExecutor(max_workers=eff_workers) as executor:
             futures = [executor.submit(_tile_single_image_worker, t_args) for t_args in tasks]
             for fut in as_completed(futures):
-                rel_fname, entry, n_t, n_skip = fut.result()
+                rel_fname, entry, n_t, n_skip, ang = fut.result()
                 ordered_results[rel_fname] = entry
                 total_tiles += n_t
                 skipped_bg_tiles += n_skip
+                if abs(ang) > 1e-3:
+                    rotated_img_count += 1
                 completed += 1
                 if completed == 1 or completed % 5 == 0 or completed == num_pool_imgs:
                     _print_inline_progress(
-                        stage_title=f"Step 1 平行切塊(x{eff_workers})",
+                        stage_title=f"Step 0+1 平行對齊切塊(x{eff_workers})",
                         current=completed,
                         total=num_pool_imgs,
                         start_t=t_tile_loop_start,
-                        extra_info=f"累計圖塊: {total_tiles} (略過背景: {skipped_bg_tiles})",
+                        extra_info=f"已旋轉={rotated_img_count} | 圖塊={total_tiles}",
                     )
 
     for t_args in tasks:
-        rf = t_args[3]
+        rf = t_args[4]
         if rf in ordered_results:
             manifest["images"][rf] = ordered_results[rf]
 
     gc.collect()
     manifest["total_tiles"] = total_tiles
     manifest["num_images"] = len(img_paths)
+    manifest["rotated_img_count"] = rotated_img_count
     manifest_path = os.path.join(manifest_save_dir, "tile_manifest.json")
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
@@ -904,12 +1017,11 @@ def prepare_tiled_test_pool(
         os.makedirs(os.path.dirname(cached_manifest_path), exist_ok=True)
         safe_copy(manifest_path, cached_manifest_path)
 
-    if large_img_count > 0:
-        log_and_print(
-            f"[Tiling-Test] 已將 {len(img_paths)} 張原圖準備為 {total_tiles} 張推論圖塊 "
-            f"(自動跳過 {skipped_bg_tiles} 張純背景角落塊, Workers={eff_workers}) -> {os.path.abspath(tiled_pool_dir)}",
-            log_files,
-        )
+    log_and_print(
+        f"[Step 0+1 完成] 共 {len(img_paths)} 張原圖 (其中 {rotated_img_count} 張已對齊旋轉) -> "
+        f"{total_tiles} 張推論圖塊 (略過純背景塊: {skipped_bg_tiles}, Workers={eff_workers})",
+        log_files,
+    )
     return manifest
 
 
@@ -944,7 +1056,8 @@ def is_tiled_png_pool_valid(
 
 
 # =====================================================================
-# MuSc-V2 Training-Free & Zero-Shot 互評推理引擎 (SNAMD SWPooling + MSM + RsCon)
+# Step 2: MuSc-V2 Training-Free & Zero-Shot 互評推理引擎
+# (Position-wise 同座標 SNAMD SWPooling + MSM + 全晶圓級 RsCon k=7 WMO)
 # =====================================================================
 
 def resolve_offline_vit_ckpt(ckpt_path: str, log_files: List[str]) -> Optional[str]:
@@ -1097,14 +1210,12 @@ def load_muscv2_vision_backbone(
 def _swpooling_2d(feat_2d: torch.Tensor, r: int) -> torch.Tensor:
     """MuSc-V2 原論文 SNAMD 的 Similarity-Weighted Pooling (Eq. 5 & 6)。"""
     b, c, h, w = feat_2d.shape
-    center = feat_2d.flatten(2).unsqueeze(2)  # (B, C, 1, H*W)
+    center = feat_2d.flatten(2).unsqueeze(2)
     nbrs = F.unfold(feat_2d, kernel_size=r, padding=r // 2, stride=1).view(b, c, r * r, h * w)
-    # Eq. (5): Lambda = exp(-||F(N_r^m) - F(m)||_2)
     dist = torch.norm(nbrs - center, p=2, dim=1, keepdim=True)
     weights = torch.exp(-dist)
-    # Eq. (6): mean(Lambda * F(N_r^m))
-    agg = (weights * nbrs).mean(dim=2)  # (B, C, H*W)
-    return agg.transpose(1, 2)          # (B, H*W, C)
+    agg = (weights * nbrs).mean(dim=2)
+    return agg.transpose(1, 2)
 
 
 def _run_msm_for_single_layer(
@@ -1126,15 +1237,11 @@ def _run_msm_for_single_layer(
     t_total_infer_start: float,
 ) -> None:
     """針對單一層特徵：先執行原論文 SNAMD (L2正規化 + 多尺度 SWPooling 融合壓縮)，再執行單次 MSM 互評。"""
-    t_msm_step = time.perf_counter()
-
     bank_dev = device if (device.type == "cuda" and total_tiles <= 1200) else torch.device("cpu")
     bank_host = torch.empty((total_tiles, num_patches, embed_dim), dtype=torch.float16, device=bank_dev)
 
-    # 1. 原論文 SNAMD: 融合 r_list 多尺度 SWPooling 特徵並壓縮回 embed_dim（免跑 3 次 MSM，提速 3x）
-    t_bank_prep = time.perf_counter()
     prep_bs = 16 if any(r > 1 for r in r_list) else 128
-    for b_step, b_s in enumerate(range(0, total_tiles, prep_bs), 1):
+    for b_s in range(0, total_tiles, prep_bs):
         b_e = min(total_tiles, b_s + prep_bs)
         raw_norm = F.normalize(layer_raw_buf[b_s:b_e].to(device).float(), dim=-1)
         sub_2d = raw_norm.transpose(1, 2).reshape(b_e - b_s, embed_dim, grid_hw, grid_hw)
@@ -1151,18 +1258,7 @@ def _run_msm_for_single_layer(
         bank_host[b_s:b_e].copy_(normed)
         del raw_norm, sub_2d, fused, normed
 
-        if b_step == 1 or b_step % 50 == 0 or b_e == total_tiles:
-            _print_inline_progress(
-                stage_title=f"Step 2.2a SNAMD 多尺度融合 (L{l_idx}, r={r_list})",
-                current=b_e,
-                total=total_tiles,
-                start_t=t_bank_prep,
-                extra_info=f"batch={b_step}",
-            )
-
-    # 2. 原論文 MSM: 每層只需執行 1 次跨片互評
-    t_msm_q_start = time.perf_counter()
-    for q_step, q_start in enumerate(range(0, total_tiles, msm_chunk_size), 1):
+    for q_start in range(0, total_tiles, msm_chunk_size):
         q_end = min(total_tiles, q_start + msm_chunk_size)
         q_feat = bank_host[q_start:q_end].to(device)
         b_q = q_end - q_start
@@ -1206,26 +1302,9 @@ def _run_msm_for_single_layer(
             patch_scores_accum[q_start + bi] += score_bi.cpu() / float(num_layers_to_run)
         del min_dist_per_peer, sorted_dists
 
-        if q_step == 1 or q_step % 50 == 0 or q_end == total_tiles:
-            _print_inline_progress(
-                stage_title=f"Step 2.2b 互評 (L{l_idx}, {layer_step}/{num_layers_to_run})",
-                current=q_end,
-                total=total_tiles,
-                start_t=t_msm_q_start,
-                extra_info=f"batch={q_step}",
-            )
-
     del bank_host
     if device.type == "cuda":
         torch.cuda.empty_cache()
-
-    _print_inline_progress(
-        stage_title="Step 2.2 MuSc-V2 互評總進度 (MSM)",
-        current=layer_step,
-        total=num_layers_to_run,
-        start_t=t_total_infer_start,
-        extra_info=f"Layer={l_idx} ({time.perf_counter() - t_msm_step:.1f}s)",
-    )
 
 
 @torch.inference_mode()
@@ -1246,12 +1325,10 @@ def run_muscv2_zero_shot_inference(
     amp_dtype_str: str = "bf16",
 ):
     """
-    執行 MuSc-V2 Training-Free & Zero-Shot 互評推論管線 (無損加速版)：
-    - 開啟 TF32 + cuDNN benchmark + AMP (bf16/fp16) + ThreadPoolExecutor 多執行緒讀圖與 Pin Memory。
-    - 智慧單次 Forward 機制：若可用 RAM 足夠同時暫存全部目標層，僅執行 1 次 Backbone Forward Pass（提速 4 倍）；
-      若 RAM 不足則自動退回單層串流防爆模式。
-    - 完整實作原論文 SNAMD (SWPooling) 與 RsCon (倒數第二層最高分 Patch + k=7 WMO)。
-    - 輸出原生解析度 (grid_hw x grid_hw) float32 .npy，磁碟寫入量縮小 ~180 倍且零精度損失。
+    執行 MuSc-V2 Training-Free & Zero-Shot 互評推論管線 (Position-wise 同座標 MSM + 全晶圓級 RsCon)：
+    - 依 (y, x) 座標分批執行 SNAMD (SWPooling) 與 MSM，單批僅佔 N 塊記憶體 (700 張僅 ~7.2 GiB / 4層)。
+    - 跨座標彙整每片晶圓「全片最高分 Patch」的倒數第二層特徵，最後統一執行原論文全晶圓級 RsCon (k=7 WMO)。
+    - 公開中低解析度資料集全部切塊皆為 (0, 0)，自動無縫退化為標準整圖互評。
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if device.type == "cuda":
@@ -1276,12 +1353,18 @@ def run_muscv2_zero_shot_inference(
     use_layers = custom_layers if custom_layers else default_layers
     grid_hw = img_input_size // patch_size
     num_patches = grid_hw * grid_hw
+    num_layers_to_run = len(use_layers)
+    penultimate_step = max(1, num_layers_to_run - 1)
 
-    tile_records = []
+    pos_groups: Dict[Tuple[int, int], List[Dict]] = {}
+    img_fnames: List[str] = []
+    total_tiles_all = 0
     for parent_idx, (fname, meta) in enumerate(manifest["images"].items()):
+        img_fnames.append(fname)
         for t in meta["tiles"]:
             t_path = t.get("tile_abs_path") or os.path.join(tiled_pool_dir, t["tile_fname"])
-            tile_records.append({
+            pos_key = (int(t["y"]), int(t["x"]))
+            pos_groups.setdefault(pos_key, []).append({
                 "parent_idx": parent_idx,
                 "parent_fname": fname,
                 "tile_stem": t["tile_stem"],
@@ -1290,25 +1373,32 @@ def run_muscv2_zero_shot_inference(
                 "h": int(t["h"]),
                 "w": int(t["w"]),
             })
-    total_tiles = len(tile_records)
+            total_tiles_all += 1
 
-    # 評估系統可用 RAM 是否足以一次收集所有層特徵 (免去重複跑 4 次 Backbone 與讀圖)
-    num_layers_to_run = len(use_layers)
-    single_layer_bytes = total_tiles * num_patches * embed_dim * 2
+    num_images = len(img_fnames)
+    sorted_pos_keys = sorted(pos_groups.keys())
+    num_positions = len(sorted_pos_keys)
+    max_group_size = max(len(v) for v in pos_groups.values())
+
     avail_ram = get_available_ram_bytes()
+    single_layer_bytes = max_group_size * num_patches * embed_dim * 2
     can_single_pass = (single_layer_bytes * (num_layers_to_run + 1)) <= int(avail_ram * 0.60)
     extract_mode_str = (
-        f"單次 Forward 全層收集 (4x提速, 預估佔用 {(single_layer_bytes * num_layers_to_run)/(1024**3):.1f} GiB)"
+        f"單次 Forward 全層收集 (4x提速, 單座標峰值≈{(single_layer_bytes * num_layers_to_run)/(1024**3):.2f} GiB)"
         if can_single_pass
         else f"單層串流省記憶體模式 (AvailRAM={avail_ram/(1024**3):.1f} GiB)"
     )
 
-    mode_desc = "高解析度大圖切塊互評" if manifest.get("large_img_count", 0) > 0 else "整張原圖直接互評 (Full-Image)"
+    mode_desc = (
+        f"同座標分批互評 Position-wise ({num_positions} 個座標格, 每格≤{max_group_size}塊)"
+        if manifest.get("large_img_count", 0) > 0
+        else "整張原圖直接互評 (Full-Image)"
+    )
+    peer_desc = "全體互評 (N×N)" if (max_peer_tiles <= 0 or max_group_size <= max_peer_tiles) else f"抽樣互評 (MaxPeers={max_peer_tiles})"
     log_and_print(
-        f"\n[Step 2 — MuSc-V2 Zero-Shot 互評推理 ({mode_desc})] Device={device} | Units={total_tiles} | "
-        f"Layers={use_layers} | r_list={r_list} (SWPooling) | Mutual_Ratio={mutual_ratio:.2f} | RsCon={'ON(k=7)' if rscon_weight > 0 else 'OFF'}\n"
-        f"   ↳ 加速配置: BatchSize={infer_batch_size} | I/O Workers={num_workers} | "
-        f"AMP={amp_str if use_amp else 'off'} | NativeFloat32Npy=ON | {extract_mode_str}",
+        f"\n[Step 2 — MuSc-V2 Zero-Shot 互評推理 ({mode_desc})] Device={device} | Images={num_images} | TotalTiles={total_tiles_all}\n"
+        f"   ↳ 核心演算法: Layers={use_layers} | r_list={r_list} (SNAMD SWPooling) | {peer_desc} | Mutual_Ratio={mutual_ratio:.2f} | 全晶圓級 RsCon={'ON(k=7)' if rscon_weight > 0 else 'OFF'}\n"
+        f"   ↳ 加速配置  : BatchSize={infer_batch_size} | I/O Workers={num_workers} | AMP={amp_str if use_amp else 'off'} | {extract_mode_str}",
         log_files,
     )
 
@@ -1326,112 +1416,44 @@ def run_muscv2_zero_shot_inference(
         rgb = load_image_rgb_uint8(rec["tile_path"])
         return transform(Image.fromarray(rgb))
 
-    patch_scores_accum = torch.zeros((total_tiles, num_patches), dtype=torch.float32, device="cpu")
-    penultimate_step = max(1, num_layers_to_run - 1)
-    salient_feats = torch.zeros((total_tiles, embed_dim), dtype=torch.float32, device="cpu")
-    parent_ids_tensor = torch.tensor([r["parent_idx"] for r in tile_records], dtype=torch.long)
+    wafer_best_score = torch.full((num_images,), -1.0, dtype=torch.float32, device="cpu")
+    wafer_salient_feat = torch.zeros((num_images, embed_dim), dtype=torch.float32, device="cpu")
 
-    num_combos = num_layers_to_run * len(r_list)
-    msm_chunk_size = (8 if total_tiles >= 600 else 16) if device.type == "cuda" else 8
+    os.makedirs(tile_amap_dir, exist_ok=True)
     t_total_infer_start = time.perf_counter()
 
-    if can_single_pass:
-        # 【快速路徑】單次 Forward Pass 同時 Hook 收集所有目標層，省去 75% 讀圖與 Backbone 運算
-        all_layer_bufs = [
-            torch.empty((total_tiles, num_patches, embed_dim), dtype=torch.float16, device="cpu")
-            for _ in use_layers
-        ]
-        hook_holder: Dict[int, torch.Tensor] = {}
-        handles = []
-        for slot_i, l_idx in enumerate(use_layers):
-            def _make_hook(slot_idx: int):
-                def _hook(_mod, _inp, out):
-                    hook_holder[slot_idx] = out[0] if isinstance(out, tuple) else out
-                return _hook
-            handles.append(blocks[l_idx].register_forward_hook(_make_hook(slot_i)))
+    with ThreadPoolExecutor(max_workers=max(1, int(num_workers))) as io_pool:
+        for pos_idx, pos_key in enumerate(sorted_pos_keys, 1):
+            group_recs = pos_groups[pos_key]
+            m_tiles = len(group_recs)
 
-        t_feat = time.perf_counter()
-        with ThreadPoolExecutor(max_workers=max(1, int(num_workers))) as io_pool:
-            for start_i in range(0, total_tiles, infer_batch_size):
-                end_i = min(total_tiles, start_i + infer_batch_size)
-                batch_recs = tile_records[start_i:end_i]
-                batch_tensors = list(io_pool.map(_load_and_transform, batch_recs))
-                x_batch = torch.stack(batch_tensors, dim=0)
-                if device.type == "cuda":
-                    x_batch = x_batch.pin_memory().to(device, non_blocking=True)
-                else:
-                    x_batch = x_batch.to(device)
+            if m_tiles < 2:
+                zero_map = np.zeros((grid_hw, grid_hw), dtype=np.float32)
+                np.save(os.path.join(tile_amap_dir, f"{group_recs[0]['tile_stem']}.npy"), zero_map)
+                continue
 
-                hook_holder.clear()
-                with torch.amp.autocast("cuda", dtype=amp_dtype, enabled=use_amp):
-                    _ = model(x_batch)
+            group_patch_scores = torch.zeros((m_tiles, num_patches), dtype=torch.float32, device="cpu")
+            group_salient_feats = torch.zeros((m_tiles, embed_dim), dtype=torch.float32, device="cpu")
+            group_parent_ids = torch.tensor([r["parent_idx"] for r in group_recs], dtype=torch.long)
+            msm_chunk_size = (8 if m_tiles >= 600 else 16) if device.type == "cuda" else 8
 
-                for slot_i in range(num_layers_to_run):
-                    tok = hook_holder[slot_i].float()
-                    patch_tok = tok[:, -num_patches:, :]
-                    all_layer_bufs[slot_i][start_i:end_i].copy_(patch_tok.to(dtype=torch.float16, device="cpu"))
-                    del tok, patch_tok
-                del x_batch
-                hook_holder.clear()
+            if can_single_pass:
+                all_layer_bufs = [
+                    torch.empty((m_tiles, num_patches, embed_dim), dtype=torch.float16, device="cpu")
+                    for _ in use_layers
+                ]
+                hook_holder: Dict[int, torch.Tensor] = {}
+                handles = []
+                for slot_i, l_idx in enumerate(use_layers):
+                    def _make_hook(slot_idx: int):
+                        def _hook(_mod, _inp, out):
+                            hook_holder[slot_idx] = out[0] if isinstance(out, tuple) else out
+                        return _hook
+                    handles.append(blocks[l_idx].register_forward_hook(_make_hook(slot_i)))
 
-                if end_i == total_tiles or (start_i // infer_batch_size) % 4 == 0:
-                    _print_inline_progress(
-                        stage_title="Step 2.1 單次全層特徵提取",
-                        current=end_i,
-                        total=total_tiles,
-                        start_t=t_feat,
-                        extra_info=f"Layers={use_layers}",
-                    )
-
-        for hdl in handles:
-            hdl.remove()
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
-
-        for layer_step, l_idx in enumerate(use_layers, 1):
-            cur_buf = all_layer_bufs[layer_step - 1]
-            _run_msm_for_single_layer(
-                layer_raw_buf=cur_buf,
-                l_idx=l_idx,
-                layer_step=layer_step,
-                r_list=r_list,
-                total_tiles=total_tiles,
-                num_patches=num_patches,
-                embed_dim=embed_dim,
-                grid_hw=grid_hw,
-                parent_ids_tensor=parent_ids_tensor,
-                mutual_ratio=mutual_ratio,
-                max_peer_tiles=max_peer_tiles,
-                num_layers_to_run=num_layers_to_run,
-                msm_chunk_size=msm_chunk_size,
-                device=device,
-                patch_scores_accum=patch_scores_accum,
-                t_total_infer_start=t_total_infer_start,
-            )
-            if layer_step == penultimate_step:
-                max_p_idx = patch_scores_accum.argmax(dim=1)
-                salient_feats.copy_(cur_buf[torch.arange(total_tiles), max_p_idx].float())
-            all_layer_bufs[layer_step - 1] = None
-            del cur_buf
-            gc.collect()
-        del all_layer_bufs
-    else:
-        # 【省記憶體備援路徑】單層串流防爆記憶體模式 (同樣享有高 Batch + AMP + 多執行緒預讀)
-        storage_device = device if (device.type == "cuda" and total_tiles <= 350) else torch.device("cpu")
-        layer_raw_buf = torch.empty((total_tiles, num_patches, embed_dim), dtype=torch.float16, device=storage_device)
-
-        with ThreadPoolExecutor(max_workers=max(1, int(num_workers))) as io_pool:
-            for layer_step, l_idx in enumerate(use_layers, 1):
-                hook_holder = {}
-                def _hook(_mod, _inp, out):
-                    hook_holder["feat"] = out[0] if isinstance(out, tuple) else out
-                handle = blocks[l_idx].register_forward_hook(_hook)
-
-                t_layer_feat = time.perf_counter()
-                for start_i in range(0, total_tiles, infer_batch_size):
-                    end_i = min(total_tiles, start_i + infer_batch_size)
-                    batch_recs = tile_records[start_i:end_i]
-                    batch_tensors = list(io_pool.map(_load_and_transform, batch_recs))
+                for start_i in range(0, m_tiles, infer_batch_size):
+                    end_i = min(m_tiles, start_i + infer_batch_size)
+                    batch_tensors = list(io_pool.map(_load_and_transform, group_recs[start_i:end_i]))
                     x_batch = torch.stack(batch_tensors, dim=0)
                     if device.type == "cuda":
                         x_batch = x_batch.pin_memory().to(device, non_blocking=True)
@@ -1442,84 +1464,157 @@ def run_muscv2_zero_shot_inference(
                     with torch.amp.autocast("cuda", dtype=amp_dtype, enabled=use_amp):
                         _ = model(x_batch)
 
-                    tok = hook_holder["feat"].float()
-                    patch_tok = tok[:, -num_patches:, :]
-                    layer_raw_buf[start_i:end_i].copy_(patch_tok.to(dtype=torch.float16, device=storage_device))
-                    del x_batch, tok, patch_tok
+                    for slot_i in range(num_layers_to_run):
+                        tok = hook_holder[slot_i].float()
+                        patch_tok = tok[:, -num_patches:, :]
+                        all_layer_bufs[slot_i][start_i:end_i].copy_(patch_tok.to(dtype=torch.float16, device="cpu"))
+                        del tok, patch_tok
+                    del x_batch
                     hook_holder.clear()
 
-                    if end_i == total_tiles or (start_i // infer_batch_size) % 4 == 0:
-                        _print_inline_progress(
-                            stage_title=f"Step 2.{layer_step}a Layer-{l_idx} 特徵提取",
-                            current=end_i,
-                            total=total_tiles,
-                            start_t=t_layer_feat,
-                            extra_info=f"緩衝區={storage_device}",
-                        )
-                handle.remove()
+                for hdl in handles:
+                    hdl.remove()
                 if device.type == "cuda":
                     torch.cuda.empty_cache()
 
-                _run_msm_for_single_layer(
-                    layer_raw_buf=layer_raw_buf,
-                    l_idx=l_idx,
-                    layer_step=layer_step,
-                    r_list=r_list,
-                    total_tiles=total_tiles,
-                    num_patches=num_patches,
-                    embed_dim=embed_dim,
-                    grid_hw=grid_hw,
-                    parent_ids_tensor=parent_ids_tensor,
-                    mutual_ratio=mutual_ratio,
-                    max_peer_tiles=max_peer_tiles,
-                    num_layers_to_run=num_layers_to_run,
-                    msm_chunk_size=msm_chunk_size,
-                    device=device,
-                    patch_scores_accum=patch_scores_accum,
-                    t_total_infer_start=t_total_infer_start,
+                for layer_step, l_idx in enumerate(use_layers, 1):
+                    cur_buf = all_layer_bufs[layer_step - 1]
+                    _run_msm_for_single_layer(
+                        layer_raw_buf=cur_buf,
+                        l_idx=l_idx,
+                        layer_step=layer_step,
+                        r_list=r_list,
+                        total_tiles=m_tiles,
+                        num_patches=num_patches,
+                        embed_dim=embed_dim,
+                        grid_hw=grid_hw,
+                        parent_ids_tensor=group_parent_ids,
+                        mutual_ratio=mutual_ratio,
+                        max_peer_tiles=max_peer_tiles,
+                        num_layers_to_run=num_layers_to_run,
+                        msm_chunk_size=msm_chunk_size,
+                        device=device,
+                        patch_scores_accum=group_patch_scores,
+                        t_total_infer_start=t_total_infer_start,
+                    )
+                    if layer_step == penultimate_step:
+                        max_p_idx = group_patch_scores.argmax(dim=1)
+                        group_salient_feats.copy_(cur_buf[torch.arange(m_tiles), max_p_idx].float())
+                    all_layer_bufs[layer_step - 1] = None
+                    del cur_buf
+                del all_layer_bufs
+            else:
+                storage_device = device if (device.type == "cuda" and m_tiles <= 350) else torch.device("cpu")
+                layer_raw_buf = torch.empty((m_tiles, num_patches, embed_dim), dtype=torch.float16, device=storage_device)
+
+                for layer_step, l_idx in enumerate(use_layers, 1):
+                    hook_holder = {}
+                    def _hook(_mod, _inp, out):
+                        hook_holder["feat"] = out[0] if isinstance(out, tuple) else out
+                    handle = blocks[l_idx].register_forward_hook(_hook)
+
+                    for start_i in range(0, m_tiles, infer_batch_size):
+                        end_i = min(m_tiles, start_i + infer_batch_size)
+                        batch_tensors = list(io_pool.map(_load_and_transform, group_recs[start_i:end_i]))
+                        x_batch = torch.stack(batch_tensors, dim=0)
+                        if device.type == "cuda":
+                            x_batch = x_batch.pin_memory().to(device, non_blocking=True)
+                        else:
+                            x_batch = x_batch.to(device)
+
+                        hook_holder.clear()
+                        with torch.amp.autocast("cuda", dtype=amp_dtype, enabled=use_amp):
+                            _ = model(x_batch)
+
+                        tok = hook_holder["feat"].float()
+                        patch_tok = tok[:, -num_patches:, :]
+                        layer_raw_buf[start_i:end_i].copy_(patch_tok.to(dtype=torch.float16, device=storage_device))
+                        del x_batch, tok, patch_tok
+                        hook_holder.clear()
+
+                    handle.remove()
+                    if device.type == "cuda":
+                        torch.cuda.empty_cache()
+
+                    _run_msm_for_single_layer(
+                        layer_raw_buf=layer_raw_buf,
+                        l_idx=l_idx,
+                        layer_step=layer_step,
+                        r_list=r_list,
+                        total_tiles=m_tiles,
+                        num_patches=num_patches,
+                        embed_dim=embed_dim,
+                        grid_hw=grid_hw,
+                        parent_ids_tensor=group_parent_ids,
+                        mutual_ratio=mutual_ratio,
+                        max_peer_tiles=max_peer_tiles,
+                        num_layers_to_run=num_layers_to_run,
+                        msm_chunk_size=msm_chunk_size,
+                        device=device,
+                        patch_scores_accum=group_patch_scores,
+                        t_total_infer_start=t_total_infer_start,
+                    )
+                    if layer_step == penultimate_step:
+                        max_p_idx = group_patch_scores.argmax(dim=1).to(storage_device)
+                        t_idx = torch.arange(m_tiles, device=storage_device)
+                        group_salient_feats.copy_(layer_raw_buf[t_idx, max_p_idx].float().cpu())
+                del layer_raw_buf
+
+            group_tile_max = group_patch_scores.max(dim=1).values
+            for i_local, rec in enumerate(group_recs):
+                p_id = rec["parent_idx"]
+                sc_val = float(group_tile_max[i_local].item())
+                if sc_val > float(wafer_best_score[p_id].item()):
+                    wafer_best_score[p_id] = sc_val
+                    wafer_salient_feat[p_id].copy_(group_salient_feats[i_local])
+
+            amap_2d_group = group_patch_scores.reshape(m_tiles, grid_hw, grid_hw).numpy()
+            for i_local, rec in enumerate(group_recs):
+                np.save(
+                    os.path.join(tile_amap_dir, f"{rec['tile_stem']}.npy"),
+                    amap_2d_group[i_local].astype(np.float32),
                 )
-                if layer_step == penultimate_step:
-                    max_p_idx = patch_scores_accum.argmax(dim=1).to(storage_device)
-                    t_idx = torch.arange(total_tiles, device=storage_device)
-                    salient_feats.copy_(layer_raw_buf[t_idx, max_p_idx].float().cpu())
-        del layer_raw_buf
+
+            del group_patch_scores, group_salient_feats, amap_2d_group
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
+
+            _print_inline_progress(
+                stage_title="Step 2 座標分批互評總進度",
+                current=pos_idx,
+                total=num_positions,
+                start_t=t_total_infer_start,
+                extra_info=f"pos=(y={pos_key[0]},x={pos_key[1]}), N={m_tiles}",
+            )
 
     gc.collect()
-    salient_feats_all = F.normalize(salient_feats, dim=-1)
-    raw_tile_max = patch_scores_accum.max(dim=1).values
-    rscon_scale = torch.ones(total_tiles, dtype=torch.float32)
 
-    if rscon_weight > 0 and total_tiles > 2:
-        # 原論文 Eq. (14)-(17): W = F_i · F_j, WMO 取 k=7 最近鄰並以 0.5/0.5 加權重評
-        w_sim = torch.mm(salient_feats_all, salient_feats_all.t())
-        same_parent = (parent_ids_tensor.unsqueeze(1) == parent_ids_tensor.unsqueeze(0))
-        if not torch.all(same_parent):
-            w_sim = w_sim.masked_fill(same_parent, -1e4)
-        else:
-            w_sim.fill_diagonal_(-1e4)
-        k_nbr = min(7, total_tiles - 1)
+    # 全晶圓級 RsCon (原論文 Eq. 14-17)
+    wafer_rscon_scale = torch.ones(num_images, dtype=torch.float32)
+    if rscon_weight > 0 and num_images > 2:
+        valid_scores = torch.clamp(wafer_best_score, min=0.0)
+        salient_norm = F.normalize(wafer_salient_feat, dim=-1)
+        w_sim = torch.mm(salient_norm, salient_norm.t())
+        w_sim.fill_diagonal_(-1e4)
+        k_nbr = min(7, num_images - 1)
         top_w, top_idx = torch.topk(w_sim, k=k_nbr, dim=1)
         top_w = torch.clamp(top_w, min=1e-6)
         norm_w = top_w / top_w.sum(dim=1, keepdim=True)
-        nbr_scores = raw_tile_max[top_idx]
-        calibrated_max = 0.5 * raw_tile_max + 0.5 * (norm_w * nbr_scores).sum(dim=1)
-        rscon_scale = calibrated_max / torch.clamp(raw_tile_max, min=1e-6)
+        nbr_scores = valid_scores[top_idx]
+        calibrated_max = 0.5 * valid_scores + 0.5 * (norm_w * nbr_scores).sum(dim=1)
+        wafer_rscon_scale = calibrated_max / torch.clamp(valid_scores, min=1e-6)
 
-    # 直接以原生解析度 (grid_hw x grid_hw) float32 存檔，單塊僅 ~5.5 KB，寫入量縮小 ~180 倍且零精度損失
-    os.makedirs(tile_amap_dir, exist_ok=True)
-    amap_2d_all = patch_scores_accum.reshape(total_tiles, grid_hw, grid_hw).numpy()
-    for idx, rec in enumerate(tile_records):
-        amap = (amap_2d_all[idx] * float(rscon_scale[idx].item())).astype(np.float32)
-        np.save(os.path.join(tile_amap_dir, f"{rec['tile_stem']}.npy"), amap)
+    for p_id, fname in enumerate(img_fnames):
+        manifest["images"][fname]["rscon_scale"] = float(wafer_rscon_scale[p_id].item())
 
-    del model, patch_scores_accum, amap_2d_all, salient_feats
+    del model, wafer_best_score, wafer_salient_feat
     if device.type == "cuda":
         torch.cuda.empty_cache()
     gc.collect()
 
 
 # =====================================================================
-# 降維縫合、四合一防誤報純化、多核心平行處理與紅框定位
+# Step 3: 降維縫合、四合一防誤報純化、逆向轉回原圖角度與紅框定位
 # =====================================================================
 
 def build_2d_feather_weight(h: int, w: int, overlap: int) -> np.ndarray:
@@ -1565,10 +1660,11 @@ def stitch_single_image_amap(
     stitch_max_dim: int = 1024,
     delete_tiles: bool = True,
 ) -> np.ndarray:
-    """將單張影像的所有子圖塊 .npy 無縫縫合至目標畫布 (預設 <= 1024px)，並在縫合後立即刪除暫存 .npy。"""
+    """將單張影像的所有子圖塊 .npy 無縫縫合至目標畫布 (預設 <= 1024px)，套用 rscon_scale 並銷毀暫存 .npy。"""
     orig_h, orig_w = img_meta["height"], img_meta["width"]
     sh, sw, scale_y, scale_x = compute_stitch_canvas_shape(orig_h, orig_w, stitch_max_dim)
     tiles = img_meta["tiles"]
+    rscon_scale = float(img_meta.get("rscon_scale", 1.0))
 
     if len(tiles) == 1 and tiles[0].get("is_full_image", False):
         t = tiles[0]
@@ -1584,7 +1680,7 @@ def stitch_single_image_amap(
                     os.remove(npy_path)
                 except OSError:
                     pass
-            return amap
+            return amap * rscon_scale
 
     canvas_sum = np.zeros((sh, sw), dtype=np.float32)
     weight_sum = np.zeros((sh, sw), dtype=np.float32)
@@ -1627,7 +1723,6 @@ def stitch_single_image_amap(
         baseline = float(np.percentile(stitched_amap[valid_mask], 5.0))
         stitched_amap[~valid_mask] = baseline
 
-    # 在縫合後的 1024px 畫布做等比例輕量平滑，取代原本對每個 512px 圖塊做 sigma=4.0 的重複模糊
     sigma = max(0.8, 4.0 * min(scale_y, scale_x))
     stitched_amap = cv2.GaussianBlur(stitched_amap, (0, 0), sigmaX=sigma)
 
@@ -1638,7 +1733,7 @@ def stitch_single_image_amap(
                     os.remove(p)
             except OSError:
                 pass
-    return stitched_amap
+    return stitched_amap * rscon_scale
 
 
 def refine_amap_for_wafer_and_noise(
@@ -1820,16 +1915,14 @@ def compute_dynamic_effective_threshold(
         return fallback, f"無樣本保底門檻 ({fallback:.4f})"
 
     total_n = int(scores_arr.size)
-    thresh_top5 = float(np.percentile(scores_arr, 95.0))  # Top 5% (P95)
-    thresh_top3 = float(np.percentile(scores_arr, 97.0))  # Top 3% (P97)
+    thresh_top5 = float(np.percentile(scores_arr, 95.0))
+    thresh_top3 = float(np.percentile(scores_arr, 97.0))
 
-    # 計算 Top 5% 切出的張數與比例（作為實際輸出 Bounding Box 的門檻）
     top5_count = int(np.sum(scores_arr >= thresh_top5))
     top5_pct = (top5_count / total_n) * 100.0
-
-    # 計算 Top 3% 切在 score 的位置與張數
     top3_count = int(np.sum(scores_arr >= thresh_top3))
     top3_pct = (top3_count / total_n) * 100.0
+
     if top3_count == 0:
         top3_cut_info = f"高於全體最高分 ({float(np.max(scores_arr)):.4f})，切出 0 張 (0.00%)"
     else:
@@ -1979,6 +2072,12 @@ def _stitch_and_refine_single_worker(task: Dict) -> Dict:
     top_k_count = max(20, int(active_flat.size * 0.0005))
     top_k_score = float(np.mean(np.partition(active_flat, -top_k_count)[-top_k_count:]))
 
+    # 關鍵：若 Step 0 有對該圖進行旋轉對齊，輸出前將熱力圖逆向轉回原圖角度 (-align_angle)
+    align_angle = float(meta.get("align_angle", 0.0))
+    if abs(align_angle) > 1e-3:
+        fill_med = float(np.median(active_amap))
+        active_amap = rotate_image_or_amap(active_amap, -align_angle, border_value=fill_med, is_amap=True)
+
     cache_npy_path = os.path.join(refined_cache_dir, f"{idx:05d}_{meta['stem']}.npy")
     try:
         np.save(cache_npy_path, active_amap.astype(np.float16))
@@ -2024,7 +2123,7 @@ def stitch_and_filter_anomalies(
     stitch_max_dim: int = 1024,
     num_workers: int = 8,
 ) -> Tuple[int, int, float, str, str, str]:
-    """多核心平行縫合與篩選（支援降維畫布 <= 1024px 與異常圖 1:1 座標映回）。"""
+    """多核心平行縫合、逆向轉回原圖角度與篩選畫框。"""
     os.makedirs(final_amap_dir, exist_ok=True)
     anomaly_dir = os.path.join(out_dir, "anomaly_images")
     anomaly_fullres_bbox_dir = os.path.join(anomaly_dir, "full_res_bbox_only")
@@ -2044,7 +2143,7 @@ def stitch_and_filter_anomalies(
     canvas_desc = f"降維畫布 <= {stitch_max_dim}px" if stitch_max_dim > 0 else "原圖全解析度"
 
     log_and_print(
-        f"\n[Step 3.1] 啟動 RAM 多核心平行縫合與碎片銷毀模式 (共 {total_imgs} 張原圖 | "
+        f"\n[Step 3.1] 啟動 RAM 多核心平行縫合、逆轉原圖角度與碎片銷毀模式 (共 {total_imgs} 張原圖 | "
         f"畫布={canvas_desc} | Workers={num_workers}) | 計分模式: {score_mode_label}",
         log_files,
     )
@@ -2083,7 +2182,7 @@ def stitch_and_filter_anomalies(
             stitched_info.append(res)
             if completed == 1 or completed % 5 == 0 or completed == total_imgs:
                 _print_inline_progress(
-                    stage_title="Step 3.1 RAM縫合與濾波",
+                    stage_title="Step 3.1 RAM縫合與逆轉",
                     current=completed,
                     total=total_imgs,
                     start_t=t_stitch_loop_start,
@@ -2102,7 +2201,7 @@ def stitch_and_filter_anomalies(
                 completed += 1
                 if completed == 1 or completed % 5 == 0 or completed == total_imgs:
                     _print_inline_progress(
-                        stage_title=f"Step 3.1 平行縫合濾波(x{eff_workers})",
+                        stage_title=f"Step 3.1 平行縫合逆轉(x{eff_workers})",
                         current=completed,
                         total=total_imgs,
                         start_t=t_stitch_loop_start,
@@ -2111,7 +2210,7 @@ def stitch_and_filter_anomalies(
 
     safe_rmtree(tile_amap_dir)
     log_and_print(
-        f"[🧹 碎片清理完成] 所有熱力圖已於 RAM 內完成重建，已自動銷毀全部暫存碎片 .npy -> {os.path.abspath(tile_amap_dir)}",
+        f"[🧹 碎片清理完成] 所有熱力圖已於 RAM 內完成重建並逆轉回原圖角度，已自動銷毀全部暫存碎片 .npy -> {os.path.abspath(tile_amap_dir)}",
         log_files,
     )
 
@@ -2212,7 +2311,7 @@ def stitch_and_filter_anomalies(
             })
             continue
 
-        # 將降維畫布紅框座標映回 1:1 原圖解析度
+        # active_amap 已逆轉回原圖方向，直接將紅框座標映回 1:1 原圖解析度
         inv_sx = w / float(max(1, amap_w))
         inv_sy = h / float(max(1, amap_h))
         bboxes_full = []
@@ -2231,6 +2330,7 @@ def stitch_and_filter_anomalies(
             active_amap.astype(save_dtype),
         )
 
+        # 直接讀取未旋轉的原始圖片作為底圖
         orig_bgr = load_image_bgr_uint8(meta["path"])
         vis_scale = max(1.0, max(h, w) / 900.0)
         box_thickness = max(2, int(round(2.5 * vis_scale)))
@@ -2255,7 +2355,6 @@ def stitch_and_filter_anomalies(
         fullres_out_path = os.path.join(anomaly_fullres_bbox_dir, prefixed_img_name)
         cv2.imwrite(fullres_out_path, bbox_canvas)
 
-        # 三合一對照圖直接於 panel_h 尺度合成熱力圖疊圖
         panel_h = min(900, h)
         panel_w = int(round(w * (panel_h / float(h))))
         p1 = cv2.resize(orig_bgr, (panel_w, panel_h), interpolation=cv2.INTER_AREA)
@@ -2271,8 +2370,9 @@ def stitch_and_filter_anomalies(
         banner_h = max(36, int(round(panel_h * 0.055)))
         banner = np.zeros((banner_h, tri_panel.shape[1], 3), dtype=np.uint8)
         mode_tag = "MuScV2-RAW" if raw_score_mode else "MuScV2-FILT"
+        ang_tag = f" | Align={meta.get('align_angle', 0.0):.1f}deg" if abs(meta.get("align_angle", 0.0)) > 1e-3 else ""
         banner_txt = (
-            f"[{mode_tag}] Orig: {fname} | Score: {max_score:.4f} (Raw: {raw_max_score:.4f}, Filt: {filtered_max_score:.4f}, "
+            f"[{mode_tag}] Orig: {fname}{ang_tag} | Score: {max_score:.4f} (Raw: {raw_max_score:.4f}, Filt: {filtered_max_score:.4f}, "
             f"EffThresh: {effective_threshold:.4f}) | Status: ANOMALY (Boxes: {len(bboxes_full)})"
         )
         cv2.putText(
@@ -2429,12 +2529,19 @@ def main():
     parser.add_argument("--data_name", type=str, default="muscv2_blind_pool")
     parser.add_argument("--category", type=str, default="auto")
 
+    # Step 0 方向對齊參數
+    parser.add_argument(
+        "--align_mode", type=str, default="full360",
+        choices=["full360", "discrete90", "off"],
+        help="Step 0 方向對齊模式：full360=任意角度對齊第一張圖, discrete90=僅90度倍數, off=關閉",
+    )
+
     # MuSc-V2 核心互評超參數
     parser.add_argument("--r_list", type=str, default="1,3,5", help="MuSc-V2 局部鄰域聚合尺度清單 (例如 1,3,5)")
     parser.add_argument("--feature_layers", type=str, default="", help="指定提取的 Transformer 層數 (留空自動依骨幹深度配置)")
     parser.add_argument("--mutual_ratio", type=float, default=0.30, help="MuSc-V2 互評機制取最低距離的比例 (預設 0.30 即 30%%)")
-    parser.add_argument("--rscon_weight", type=float, default=0.15, help="MuSc-V2 RsCon 全域鄰域重評開關 (>0 啟用原論文 k=7 WMO，0 關閉)")
-    parser.add_argument("--max_peer_tiles", type=int, default=400, help="大盲池互評時每個 Query 最多抽樣比較的他片圖塊數")
+    parser.add_argument("--rscon_weight", type=float, default=0.15, help="MuSc-V2 全晶圓級 RsCon 重評開關 (>0 啟用 k=7 WMO，0 關閉)")
+    parser.add_argument("--max_peer_tiles", type=int, default=400, help="單座標互評時每個 Query 最多抽樣比較的他片圖塊數 (設 0 則全體 N×N 互評)")
 
     # 門檻與動態對齊參數
     parser.add_argument(
@@ -2464,8 +2571,8 @@ def main():
     parser.add_argument("--disable_tiling", action="store_true")
 
     # 無損加速參數
-    parser.add_argument("--infer_batch_size", type=int, default=64, help="提取特徵時的 Batch Size (預設由 16 提升至 64)")
-    parser.add_argument("--num_workers", type=int, default=default_workers, help="切塊、讀圖與縫合之多核心 Worker 數")
+    parser.add_argument("--infer_batch_size", type=int, default=64, help="提取特徵時的 Batch Size")
+    parser.add_argument("--num_workers", type=int, default=default_workers, help="對齊、切塊、讀圖與縫合之多核心 Worker 數")
     parser.add_argument("--stitch_max_dim", type=int, default=1024, help="縫合與濾波畫布最大邊長 (預設 1024，設 0 則退回原圖解析度)")
     parser.add_argument("--amp_dtype", type=str, default="bf16", choices=["bf16", "fp16", "off"], help="GPU 混合精度設定")
 
@@ -2506,7 +2613,7 @@ def main():
         f"\n{'=' * 75}\n"
         f"[MuSc-V2 Zero-Shot 無GT抓漏純推論啟動時間] {start_dt_str}\n"
         f"[本次專屬時間戳記輸出目錄] {run_out_dir}\n"
-        f"[無損加速設定] BatchSize={args.infer_batch_size} | Workers={args.num_workers} | "
+        f"[無損加速設定] Align={args.align_mode} | BatchSize={args.infer_batch_size} | Workers={args.num_workers} | "
         f"StitchCanvas={args.stitch_max_dim}px | AMP={args.amp_dtype}\n"
         f"{'=' * 75}",
         log_files,
@@ -2541,7 +2648,7 @@ def main():
 
     pool_signature = compute_pool_signature(args.pool_dir)
     tile_config_key = (
-        f"mtr{args.min_tiling_res}_t{args.tile_size}_ov{args.tile_overlap}"
+        f"al{args.align_mode}_mtr{args.min_tiling_res}_t{args.tile_size}_ov{args.tile_overlap}"
         f"_bg{args.bg_std_thresh:g}_dt{int(args.disable_tiling)}"
         f"_pm{int(args.pre_mask)}_pmm{args.pre_mask_margin:g}_pmf{args.pre_mask_fill}"
         f"_cx{args.mask_cx:g}_cy{args.mask_cy:g}_r{args.mask_r:g}"
@@ -2572,12 +2679,12 @@ def main():
         num_test_images = manifest.get("num_images", 1)
         total_test_tiles = manifest.get("total_tiles", num_test_images)
         cache_mode_note = (
-            f"切塊子圖塊 PNG ({total_test_tiles} 塊)"
+            f"對齊與切塊 PNG ({total_test_tiles} 塊)"
             if manifest.get("large_img_count", 0) > 0
             else f"整張原圖直接推論 ({num_test_images} 張，防呆跳過切塊)"
         )
         log_and_print(
-            f"\n[⚡ 測試池清單快取命中] 測試圖片池與解析度參數未變動，直接沿用既有 {cache_mode_note} (0.00 秒)",
+            f"\n[⚡ 測試池清單快取命中] 測試圖片池與參數未變動，直接沿用既有 {cache_mode_note} (0.00 秒)",
             log_files,
         )
     else:
@@ -2604,6 +2711,7 @@ def main():
             manual_cx=args.mask_cx,
             manual_cy=args.mask_cy,
             manual_r=args.mask_r,
+            align_mode=args.align_mode,
         )
         test_tile_sec = time.perf_counter() - t_test_tile_start
         num_test_images = manifest.get("num_images", 1)
@@ -2662,9 +2770,9 @@ def main():
     total_wall_time = time.perf_counter() - pipeline_start_t
 
     step1_label = (
-        f"Step 1 大圖高解析度切塊 ({total_test_tiles} 塊)"
+        f"Step 0+1 方向對齊與切塊 ({total_test_tiles} 塊)"
         if manifest.get("large_img_count", 0) > 0
-        else f"Step 1 解析度防呆檢查 ({num_test_images} 張全圖)"
+        else f"Step 0+1 方向對齊與檢查 ({num_test_images} 張全圖)"
     )
 
     infer_done_summary = (
@@ -2674,8 +2782,8 @@ def main():
         f"  [1] 整體推論階段總時間 (Total Inference Time) : {format_duration(total_infer_time)}\n"
         f"      ├─ {step1_label:<38} : {format_duration(test_tile_sec)}"
         f"{' (Cached)' if used_png_tile_cache else ''}\n"
-        f"      ├─ Step 2 MuSc-V2 Zero-Shot 互評推理 (BS={args.infer_batch_size}) : {format_duration(model_infer_sec)}\n"
-        f"      ├─ Step 3 RAM 縫合銷毀碎片與{'未濾波' if args.raw_score_mode else '防誤報濾波'}畫框 (Canvas<={args.stitch_max_dim}px) : {format_duration(stitch_vis_sec)}\n"
+        f"      ├─ Step 2 MuSc-V2 同座標互評與全晶圓RsCon (BS={args.infer_batch_size}) : {format_duration(model_infer_sec)}\n"
+        f"      ├─ Step 3 RAM 縫合、逆轉原圖與{'未濾波' if args.raw_score_mode else '防誤報濾波'}畫框 (Canvas<={args.stitch_max_dim}px) : {format_duration(stitch_vis_sec)}\n"
         f"      └─ 平均每張原圖推論耗時 ({num_test_images} 張原圖)         : {avg_infer_per_img:.2f} 秒/張\n"
         f"{'-' * 75}\n"
         f"  [2] 任務全程總執行時間 (Total Wall Time)      : {format_duration(total_wall_time)}\n"

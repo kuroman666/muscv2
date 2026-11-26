@@ -46,13 +46,14 @@ fi
 
 # --- 階段執行控制開關 ---
 FORCE_INFER="" # 若想強制重切測試塊並重跑推論，設為 "--force_infer"
+ALIGN_MODE="full360" # Step 0 方向對齊模式：full360=任意角度對齊第一張圖 / discrete90=僅90度倍數 / off=關閉
 
 # --- MuSc-V2 Zero-Shot 互評超參數 ---
 R_LIST="1,3,5"
 FEATURE_LAYERS="" # 留空自動配置 (24層ViT-L預設 5,11,17,23；12層ViT-B預設 2,5,8,11)
 MUTUAL_RATIO=0.30
 RSCON_WEIGHT=0.15
-MAX_PEER_TILES=400
+MAX_PEER_TILES=0
 
 # --- 智慧解析度防呆切塊參數 ---
 MIN_TILING_RES=1536 # 大圖防呆門檻：僅當長邊 >= 1536px (如 4096x4096/5000x5000 晶圓) 才切塊
@@ -236,6 +237,7 @@ run_single_inside_muscv2_pool() {
 
   python 1_infer_muscv2_no_gt.py \
     --pool_dir "${POOL_DIR}" \
+    --align_mode "${ALIGN_MODE}" \
     --ckpt "${DINO_CKPT_PATH}" \
     --backbone "${BACKBONE_NAME}" \
     --out_dir "${SAVE_BASE_DIR}" \
