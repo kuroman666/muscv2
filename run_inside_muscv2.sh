@@ -53,7 +53,7 @@ R_LIST="1,3,5"
 FEATURE_LAYERS="" # 留空自動配置 (24層ViT-L預設 5,11,17,23；12層ViT-B預設 2,5,8,11)
 MUTUAL_RATIO=0.30
 RSCON_WEIGHT=0.15
-MAX_PEER_TILES=0
+MAX_PEER_TILES=150
 
 # --- 智慧解析度防呆切塊參數 ---
 MIN_TILING_RES=1536 # 大圖防呆門檻：僅當長邊 >= 1536px (如 4096x4096/5000x5000 晶圓) 才切塊
