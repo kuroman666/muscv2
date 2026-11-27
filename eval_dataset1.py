@@ -1,11 +1,12 @@
 import os
 import pandas as pd
+from sklearn.metrics import roc_auc_score, average_precision_score
 
 # ==========================================
 # 1. 設定檔案路徑
 # ==========================================
-GT_CSV = "dataset1_gt.csv"                  # 欄位需包含: filename, gt_label (1=瑕疵, 0=正常)，可選: batch
-PRED_CSV = "escape_ranking_report.csv"      # 1_infer_muscv2_no_gt.py 產出的報表
+GT_CSV = "dataset1_gt.csv"                      # 欄位需包含: filename, gt_label (1=瑕疵, 0=正常)，可選: batch
+PRED_CSV = "escape_ranking_report.csv"          # 1_infer_muscv2_no_gt.py 產出的報表
 OUTPUT_DETAIL_CSV = "dataset1_eval_detail.csv"  # 輸出每張圖的對答案明細（方便查哪幾張判錯）
 
 
@@ -16,6 +17,16 @@ def clean_stem(filename: str) -> str:
     """只保留最乾淨的檔名（去掉路徑與副檔名），確保兩份 CSV 100% 對得上"""
     base = os.path.basename(str(filename).strip())
     return os.path.splitext(base)[0]
+
+
+def calc_threshold_free_metrics(y_true: pd.Series, y_score: pd.Series) -> tuple:
+    """計算與門檻無關的指標：AUROC 與 AP（對齊原論文 Sec. IV-A2）"""
+    # 防呆：若樣本全為正常或全為瑕疵，無法計算 AUROC / AP
+    if y_true.nunique() < 2:
+        return None, None
+    auroc = roc_auc_score(y_true, y_score)
+    ap = average_precision_score(y_true, y_score)
+    return auroc, ap
 
 
 def calc_metrics(y_true: pd.Series, y_pred: pd.Series) -> dict:
@@ -46,12 +57,12 @@ def calc_metrics(y_true: pd.Series, y_pred: pd.Series) -> dict:
 def print_report(title: str, th: float, m: dict):
     print(f"\n📌 【{title}】 Threshold >= {th:.4f}")
     print(f"  - Accuracy  : {m['Accuracy']:.2%}")
-    print(f"  - Precision : {m['Precision']:.2%}  |  Recall : {m['Recall']:.2%}  |  F1 : {m['F1']:.4f}")
+    print(f"  - Precision : {m['Precision']:.2%}  |  Recall : {m['Recall']:.2%}  |  F1 : {m['F1']:.2%}")
     print(f"  - 混淆矩陣   : TP={m['TP']}, FN={m['FN']} (漏抓) | TN={m['TN']}, FP={m['FP']} (誤報)")
 
 
 # ==========================================
-# 3. 主程式：讀取、合併、掃描最佳 Threshold
+# 3. 主程式：讀取、合併、計算論文指標與掃描最佳 Threshold
 # ==========================================
 def main():
     # 1. 讀取兩份 CSV
@@ -86,40 +97,60 @@ def main():
     print(f"✅ 成功比對總張數: {n_total} 張（瑕疵: {n_pos} 張 / 正常: {n_neg} 張）")
     print("=" * 65)
 
-    # 4. 掃描所有候選 Threshold（每個分數都試一次，加上全部判正常的高門檻）
+    # 4. 計算 Threshold-free 指標 (AUROC, AP)
+    auroc, ap = calc_threshold_free_metrics(merged["gt_label"], merged["Max_Score"])
+
+    # 5. 掃描所有候選 Threshold（找 F1-max 與最高 Accuracy 切點）
     scores = sorted(merged["Max_Score"].unique())
     candidate_ths = scores + [scores[-1] + 1e-4]
 
-    best_acc_th, best_acc_metrics = None, {"Accuracy": -1}
     best_f1_th, best_f1_metrics = None, {"F1": -1}
+    best_acc_th, best_acc_metrics = None, {"Accuracy": -1}
 
     for th in candidate_ths:
         y_pred = (merged["Max_Score"] >= th).astype(int)
         m = calc_metrics(merged["gt_label"], y_pred)
 
-        if m["Accuracy"] > best_acc_metrics["Accuracy"]:
-            best_acc_th, best_acc_metrics = th, m
-
         if m["F1"] > best_f1_metrics["F1"]:
             best_f1_th, best_f1_metrics = th, m
 
-    # 5. 印出最佳結果
-    print_report("最高 Accuracy 切點", best_acc_th, best_acc_metrics)
-    print_report("最高 F1-Score 切點（不平衡比例時建議參考）", best_f1_th, best_f1_metrics)
+        if m["Accuracy"] > best_acc_metrics["Accuracy"]:
+            best_acc_th, best_acc_metrics = th, m
 
-    # 6. 若 dataset1_gt.csv 有 batch 欄位，順便印出各批在最佳 Accuracy 切點下的表現
+    # 6. 印出原論文 Sec. IV-A2 核心指標總覽
+    auroc_str = f"{auroc:.2%}" if auroc is not None else "N/A"
+    ap_str = f"{ap:.2%}" if ap is not None else "N/A"
+    print("\n🏆 【原論文 Sec. IV-A2 核心指標總覽】")
+    print(f"  - AUROC-cls  : {auroc_str}")
+    print(f"  - AP-cls     : {ap_str}")
+    print(f"  - F1-max-cls : {best_f1_metrics['F1']:.2%}  (Optimal Threshold >= {best_f1_th:.4f})")
+
+    # 7. 印出兩組最佳切點的詳細混淆矩陣
+    print_report("F1-max 最佳切點（對齊原論文）", best_f1_th, best_f1_metrics)
+    print_report("最高 Accuracy 切點（對照參考）", best_acc_th, best_acc_metrics)
+
+    # 8. 若 dataset1_gt.csv 有 batch 欄位，順便印出各批的 AUROC / AP 與切點表現
     if "batch" in merged.columns:
         print("\n" + "-" * 65)
-        print(f"📊 各批次細部表現（套用最佳 Accuracy 切點 >= {best_acc_th:.4f}）：")
+        print(f"📊 各批次細部表現（套用 F1-max 切點 >= {best_f1_th:.4f}）：")
         for batch, group in merged.groupby("batch", sort=True):
-            y_pred_sub = (group["Max_Score"] >= best_acc_th).astype(int)
-            m_sub = calc_metrics(group["gt_label"], y_pred_sub)
-            print(f"  - {batch}: Acc={m_sub['Accuracy']:.2%} | Recall={m_sub['Recall']:.2%} "
-                  f"(TP={m_sub['TP']}, FN={m_sub['FN']}, FP={m_sub['FP']}, TN={m_sub['TN']})")
+            b_auroc, b_ap = calc_threshold_free_metrics(group["gt_label"], group["Max_Score"])
+            b_auroc_s = f"{b_auroc:.2%}" if b_auroc is not None else "N/A"
+            b_ap_s = f"{b_ap:.2%}" if b_ap is not None else "N/A"
 
-    # 7. 輸出詳細對答案明細（套用最佳 Accuracy 切點），方便檢查誤報與漏抓
-    merged["pred_label"] = (merged["Max_Score"] >= best_acc_th).astype(int)
-    merged["is_correct"] = (merged["pred_label"] == merged["gt_label"])
+            y_pred_sub = (group["Max_Score"] >= best_f1_th).astype(int)
+            m_sub = calc_metrics(group["gt_label"], y_pred_sub)
+            print(
+                f"  - {batch}: AUROC={b_auroc_s} | AP={b_ap_s} | F1={m_sub['F1']:.2%} | "
+                f"Recall={m_sub['Recall']:.2%} (TP={m_sub['TP']}, FN={m_sub['FN']}, FP={m_sub['FP']}, TN={m_sub['TN']})"
+            )
+
+    # 9. 輸出詳細對答案明細（同時記錄 F1-max 與最高 Accuracy 兩組預測結果）
+    merged["pred_f1max"] = (merged["Max_Score"] >= best_f1_th).astype(int)
+    merged["correct_f1max"] = (merged["pred_f1max"] == merged["gt_label"])
+    merged["pred_acc"] = (merged["Max_Score"] >= best_acc_th).astype(int)
+    merged["correct_acc"] = (merged["pred_acc"] == merged["gt_label"])
+
     merged = merged.sort_values(by="Max_Score", ascending=False)
     merged.drop(columns=["clean_key"]).to_csv(OUTPUT_DETAIL_CSV, index=False, encoding="utf-8-sig")
 
