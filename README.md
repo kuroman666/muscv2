@@ -18,7 +18,7 @@
   * 自動偵測圖片解析度：廠內大圖（$\ge 1536\text{px}$，如 $4096 \times 4096$、$5000 \times 5000$）自動切為 $512 \times 512$（重疊 $64\text{px}$ / $12.5\%$）並跳過純黑背景塊；廠外公開集（$< 1536\text{px}$）自動維持整張原圖推論。
   * 自動同時偵測實體主機與 Docker cgroup (v1/v2) 記憶體上限，安全切換單次 Forward 全層收集（4 倍提速）或單層串流模式。
 * **無損加速、四合一防誤報濾波 & 背景資源監控**：支援 TF32 / AMP (`bf16`/`fp16`)、多執行緒讀圖、降維畫布（`1024px`）多核心平行縫合與碎片 `.npy` 自動銷毀、四合一防誤報純化濾波，以及每秒自動記錄 RAM / GPU VRAM 峰值的背景監控程序。
-* **CSV 自動化比對、母體維護與抽樣實驗工具組**：內建 5 支獨立 Python 腳本（`build_master_gt.py`、`recalc_metrics.py`、`calc_batch_distribution.py`、`sample_experiment.py`、`eval_dataset1.py`），以 CSV 全面取代人工檔名比對，涵蓋 FoundAD / MuSc-V2 重疊扣除、工程師複判一鍵重算、批次比例統計、Uniform Sampling 抽樣建集與最佳 Threshold 自動掃描（詳見[第六節](#六自動化評估母體維護與抽樣實驗工具組csv-流程)）。
+* **CSV 自動化比對、母體維護與抽樣實驗工具組**：內建 5 支獨立 Python 腳本（`build_master_gt.py`、`recalc_metrics.py`、`calc_batch_distribution.py`、`sample_experiment.py`、`eval_dataset1.py`），以 CSV 全面取代人工檔名比對，涵蓋 FoundAD / MuSc-V2 重疊扣除、工程師複判一鍵重算、批次比例統計、自動回溯原始資料夾複製無框原圖（Uniform Sampling），以及對齊原論文 Sec. IV-A2 的 **AUROC / AP / F1-max / Accuracy** 自動評估（詳見[第六節](#六自動化評估母體維護與抽樣實驗工具組csv-流程)）。
 
 ---
 
@@ -28,7 +28,7 @@
    ```bash
    conda activate muscv2
    ```
-   > 若使用第六節的自動化評估腳本，請確認環境已安裝 `pandas`（若尚未安裝可執行 `pip install pandas`）。
+   > 若使用第六節的自動化評估腳本，請確認環境已安裝 `pandas` 與 `scikit-learn`（若尚未安裝可執行 `pip install pandas scikit-learn`）。
 2. **離線預訓練權重放置位置（公司無外網環境必看）**：
    腳本具備離線權重自動搜尋機制（`--ckpt auto`），會依序掃描以下路徑中的 `.pth` / `.pt` / `.bin` 權重檔（優先匹配 `dinov2_vitl14` → `dinov3` → `dinov2`）：
    * `./dinov2_vitl14_pretrain.pth`（直接放在專案根目錄最方便）
@@ -192,7 +192,7 @@ MuSc-V2/
 
 ## 六、自動化評估、母體維護與抽樣實驗工具組（CSV 流程）
 
-為解決廠內長檔名人工核對容易出錯的問題，本專案新增 5 支獨立 Python 自動化腳本，透過 CSV 串聯「**母體建置 → 工程師複判重算 → 批次比例統計 → Uniform Sampling 抽樣建集 → 推論自動對答案**」完整閉環。
+為解決廠內長檔名人工核對容易出錯的問題，本專案新增 5 支獨立 Python 自動化腳本，透過 CSV 串聯「**母體建置 → 工程師複判重算 → 批次比例統計 → 回溯原圖資料夾抽樣建集 → 推論自動對答案（AUROC / AP / F1-max / Accuracy）**」完整閉環。
 
 ### 1. 總體執行順序與相依關係（必看）
 
@@ -201,7 +201,7 @@ MuSc-V2/
 ```text
 [階段一：初次建置母體總表（必須最先執行，僅初次建立時跑一次）]
   1. python build_master_gt.py
-       └── 產出：master_gt.csv（已自動剝除 Rank 前綴並扣除 FoundAD / MuSc-V2 重疊）
+       └── 產出：master_gt.csv（自動剝除紅框圖的 Rank 前綴、扣除 FoundAD / MuSc-V2 重疊，僅記錄乾淨原檔名）
 
               │
               ▼ （若工程師複判退回部分圖片，開啟 master_gt.csv 將該列 engineer_confirmed 改為 0 並存檔）
@@ -215,11 +215,11 @@ MuSc-V2/
 
 [階段三：抽樣實驗與自動對答案閉環（以下 3 步須嚴格依序執行）]
   3. python sample_experiment.py
-       └── 產出：exp_<MODE>/images/（抽樣圖檔）＋ exp_<MODE>/dataset1_gt.csv（標準答案卷）
+       └── 產出：exp_<MODE>/images/（從 RAW_DIRS 複製乾淨無框原圖）＋ exp_<MODE>/dataset1_gt.csv（標準答案卷）
   4. bash run_inside_muscv2.sh ./exp_<MODE>/images
        └── 產出：wafer_escape_results/.../<時間戳記>/escape_ranking_report.csv（模型推論分數報表）
   5. python eval_dataset1.py（將 GT_CSV 與 PRED_CSV 指向步驟 3 與步驟 4 的檔案）
-       └── 產出：最佳 Threshold / Accuracy / F1 報表 ＋ dataset1_eval_detail.csv（逐張對答案明細）
+       └── 產出：AUROC / AP / F1-max / Accuracy 報表 ＋ dataset1_eval_detail.csv（逐張對答案明細）
 ```
 
 | 執行順序 | 腳本名稱 | 前置必備檔案 / 條件 | 主要輸入 | 主要輸出 |
@@ -229,22 +229,22 @@ MuSc-V2/
 | **Step 2B** | `calc_batch_distribution.py` | `master_gt.csv` + 各批 `raw_dir` | `master_gt.csv`、`raw_dir` | `batch_distribution.csv` |
 | **Step 3** | `sample_experiment.py` | `master_gt.csv` + 各批 `raw_dir` | `master_gt.csv`、`raw_dir` | `exp_<MODE>/images/`、`exp_<MODE>/dataset1_gt.csv` |
 | **Step 4** | `run_inside_muscv2.sh` | Step 3 產出的 `exp_<MODE>/images/` | `exp_<MODE>/images/` | `escape_ranking_report.csv` |
-| **Step 5** | `eval_dataset1.py` | Step 3 的 `dataset1_gt.csv` + Step 4 的 `escape_ranking_report.csv` | `dataset1_gt.csv`、`escape_ranking_report.csv` | `dataset1_eval_detail.csv` + 終端機指標報告 |
+| **Step 5** | `eval_dataset1.py` | Step 3 的 `dataset1_gt.csv` + Step 4 的 `escape_ranking_report.csv` | `dataset1_gt.csv`、`escape_ranking_report.csv` | `dataset1_eval_detail.csv` + 論文指標報告 |
 
 ---
 
 ### 2. 各腳本詳細用法與設定說明
 
 #### (1) `build_master_gt.py` — 自動還原原檔名、扣 Overlap 並建置母體總表
-* **用途**：掃描各批次（`W639`、`W642`、`W646`）的 FoundAD 與 MuSc-V2 瑕疵資料夾，自動剝除 MuSc-V2 檔名前綴（`Rank001_Score0.8720_Box01_`）、子資料夾連接符（`__`）與副檔名，利用集合（Set）自動扣除重疊並建立 Dataset 2 瑕疵母體總表。
+* **用途**：掃描各批次（`W639`、`W642`、`W646`）的 FoundAD 與 MuSc-V2 瑕疵資料夾（即使資料夾內是含紅框與 `Rank001_Score0.8720_Box01_` 前綴的複判圖也沒關係），自動剝除前綴、子資料夾連接符（`__`）與副檔名，利用集合（Set）自動扣除重疊並建立 Dataset 2 瑕疵母體總表。**本腳本只記錄乾淨原檔名，不會複製任何紅框圖。**
 * **雙重防呆機制**：只要在設定區填入原始圖片資料夾 `raw_dir`，程式會優先比對乾淨檔名，若遇 FoundAD 或人工加過其他前後綴，會自動啟用「包含比對」救援；若仍完全對不上，終端機會印出 `⚠️ [警告]` 列出異常檔名，絕不默默算錯。
 * **執行前修改（檔案頂部 `BATCH_CONFIG`）**：
   ```python
   BATCH_CONFIG = {
       "W639": {
-          "raw_dir": "/path/to/W639_raw",               # 強烈建議填寫作防呆字典；暫無可填 None
+          "raw_dir": "/path/to/W639_raw",               # 強烈建議填寫原始無框圖資料夾作防呆字典
           "foundad_dir": "/path/to/W639_foundad_defects",
-          "muscv2_dir": "/path/to/W639_muscv2_defects", # 含 Rank 前綴免手動改名
+          "muscv2_dir": "/path/to/W639_muscv2_defects", # 含 Rank 前綴的複判圖免手動改名
       },
       # ... W642, W646 同理
   }
@@ -293,14 +293,14 @@ MuSc-V2/
 
 ---
 
-#### (4) `sample_experiment.py` — Uniform Sampling 自動抽樣建集與產出答案卷
-* **用途**：讀取 `master_gt.csv` 中 `engineer_confirmed == 1` 的最新確認瑕疵，將各批 `raw_dir` 自動切分為「瑕疵池」與「正常池」，以固定隨機種子（預設 `RANDOM_SEED = 42`）執行無放回均勻抽樣（Uniform Sampling），自動將圖片複製到獨立實驗資料夾並同步產出 `dataset1_gt.csv`，完全免人工挑圖與貼檔名。
+#### (4) `sample_experiment.py` — 自動回溯原圖、Uniform Sampling 抽樣建集與產出答案卷
+* **用途**：讀取 `master_gt.csv` 中 `engineer_confirmed == 1` 的乾淨原檔名，直接回到 **`RAW_DIRS`（原始無框圖片資料夾）** 切分「瑕疵池」與「正常池」，以固定隨機種子（預設 `RANDOM_SEED = 42`）執行無放回均勻抽樣（Uniform Sampling），自動複製**無紅框的乾淨原圖**到獨立實驗資料夾並同步產出 `dataset1_gt.csv`。
 * **執行前修改（檔案頂部 `RAW_DIRS` 與 `ACTIVE_MODE`）**：
-  只要切換 `ACTIVE_MODE` 字串即可快速產出不同比例的實驗集（亦可在 `EXPERIMENT_PRESETS` 內自訂張數，`"defect": "all"` 代表全數取用該批已確認瑕疵）：
+  務必將 `RAW_DIRS` 指向廠內真正的原始無框圖片資料夾。只要切換 `ACTIVE_MODE` 字串即可快速產出不同比例的實驗集（亦可在 `EXPERIMENT_PRESETS` 內自訂張數，`"defect": "all"` 代表全數取用該批已確認瑕疵；若只需單獨匯出純瑕疵乾淨原圖，可新增 `"normal": 0` 的模式）：
 
   | `ACTIVE_MODE` 模式名稱 | W639 (瑕疵/正常) | W642 (瑕疵/正常) | W646 (瑕疵/正常) | 總張數與實驗目的 |
   | :--- | :---: | :---: | :---: | :--- |
-  | `"1_to_1"` | 5 / 5 | 5 / 5 | 5 / 5 | 共 30 張（15 瑕疵 : 15 正常），原始 1:1 基準實驗 |
+  | `"1_to_1"` | 5 / 5 | 5 / 5 | 5 / 5 | 共 30 張（15 瑕疵 : 15 正常），1:1 基準實驗（對齊 FoundAD 與 RsCon $k=7$ 下限） |
   | `"7_to_3"` | 5 / 12 | 5 / 12 | 5 / 11 | 共 50 張（15 瑕疵 : 35 正常），測試 30% : 70% 比例 |
   | `"100_normal_each"` *(預設)* | 5 / 100 | 5 / 100 | 5 / 100 | 共 315 張（15 瑕疵 : 300 正常），正常樣本放大 20 倍驗證 Threshold |
   | `"dataset2_all_defects"` | all / 100 | all / 100 | all / 100 | 全部最新確認瑕疵 + 各批均勻抽正常，驗證「跨批混合 vs. 各批獨立推論」 |
@@ -312,14 +312,14 @@ MuSc-V2/
 * **輸出結構**：自動依模式名稱建立 `exp_<ACTIVE_MODE>/`（不同模式互不覆蓋；重複執行同模式時會先清空該模式的 `images/` 避免殘留舊圖）：
   ```text
   exp_<ACTIVE_MODE>/
-  ├── images/            # 抽出的所有實驗圖片（直接丟給 run_inside_muscv2.sh 跑推論）
+  ├── images/            # 從 RAW_DIRS 複製出來的乾淨無框原圖（直接丟給 run_inside_muscv2.sh 跑推論）
   └── dataset1_gt.csv    # 對應標準答案卷（欄位：batch, filename, gt_label；1=瑕疵, 0=正常）
   ```
 
 ---
 
-#### (5) `eval_dataset1.py` — 推論結果自動對答案與最佳 Threshold 掃描
-* **用途**：讀取 `dataset1_gt.csv` 與 MuSc-V2 推論完畢後產出的 `escape_ranking_report.csv`（使用 `Original_Filename` 與 `Max_Score` 欄位），自動剝除路徑與副檔名完成 100% 檔名對齊，逐一掃描所有候選 Threshold，輸出**最高 Accuracy 切點**與**最高 F1-Score 切點**（在 7:3 或正常放大 20 倍的不平衡實驗中，建議同時參考 F1 切點避免 Accuracy 失真）。
+#### (5) `eval_dataset1.py` — 推論結果自動對答案與原論文指標計算（AUROC / AP / F1-max / Accuracy）
+* **用途**：讀取 `dataset1_gt.csv` 與 MuSc-V2 推論完畢後產出的 `escape_ranking_report.csv`（使用 `Original_Filename` 與 `Max_Score` 欄位），自動剝除路徑與副檔名完成 100% 檔名對齊。**100% 對齊 MuSc-V2 原論文 Sec. IV-A2 評估標準**，直接計算與門檻無關的 **AUROC-cls**、**AP-cls**，並掃描所有候選 Threshold 找出 **F1-max 最佳切點** 與 **最高 Accuracy 切點**（對照參考）。
 * **執行前修改（檔案頂部路徑）**：
   ```python
   GT_CSV = "exp_100_normal_each/dataset1_gt.csv"  # 對應 Step 3 產出的答案卷
@@ -331,8 +331,11 @@ MuSc-V2/
   python eval_dataset1.py
   ```
 * **輸出內容**：
-  1. **終端機報表**：成功比對總張數（若有遺漏會印出 `⚠️ [警告]`）、最高 Accuracy 與最高 F1 兩組切點的 Accuracy / Precision / Recall / F1 與混淆矩陣（TP / FP / TN / FN），以及依 `batch` 分組的各批次細部表現。
-  2. **`dataset1_eval_detail.csv`**：依 `Max_Score` 由高到低排序的逐張對答案明細（含 `pred_label` 與 `is_correct`），方便直接篩選 `is_correct == False` 追查誤報（FP）與漏抓（FN）。
+  1. **終端機報表**：
+     * **原論文 Sec. IV-A2 核心指標總覽**：`AUROC-cls`、`AP-cls`、`F1-max-cls`（含 Optimal Threshold）。
+     * **兩組切點詳細混淆矩陣**：分別列出 `F1-max 最佳切點` 與 `最高 Accuracy 切點` 的 Accuracy / Precision / Recall / F1 與 TP / FP / TN / FN。
+     * **各批次細部表現**：依 `batch` 分組印出各批的 `AUROC`、`AP`、`F1`、`Recall` 與混淆矩陣（內建單一類別防呆，不報錯）。
+  2. **`dataset1_eval_detail.csv`**：依 `Max_Score` 由高到低排序的逐張對答案明細，同時記錄兩組切點的預測與對錯（`pred_f1max`, `correct_f1max`, `pred_acc`, `correct_acc`），方便直接篩選追查誤報（FP）與漏抓（FN）。
 
 ---
 
@@ -348,7 +351,7 @@ MuSc-V2/
 
 ### Q2：如果資料集裡正常圖跟瑕疵圖是 1:1（甚至幾乎都是瑕疵圖），MuSc-V2 還抓得到嗎？
 * **抓得到**。原論文（Sec. IV-D5, Fig. 10）已證實即使正常樣本降到 0 張，分割指標 AUROC 仍僅掉不到 $0.23\%$，因為每張工業影像仍有 $> 99\%$ 的像素是正常的。
-* **唯一需注意**：高瑕疵率批號中，模型依然會把瑕疵圖穩穩排在 `escape_ranking_report.csv` 前半段，但預設的 Top 5% (P95) 門檻只會畫出前 $5\%$ 的紅框；若批號真實瑕疵率 $> 5\%$，請檢視 CSV 分數分佈並改以固定門檻重新切分（或直接交由 `eval_dataset1.py` 掃描最佳切點）。
+* **唯一需注意**：高瑕疵率批號中，模型依然會把瑕疵圖穩穩排在 `escape_ranking_report.csv` 前半段，但預設的 Top 5% (P95) 門檻只會畫出前 $5\%$ 的紅框；若批號真實瑕疵率 $> 5\%$，請直接交由 `eval_dataset1.py` 計算 AUROC / AP 並掃描最佳切點。
 
 ### Q3：自動偵測的圓形 Mask 圓心歪掉，或切到晶圓有效區域 / 留到背景怎麼辦？
 * **解決方法**：重跑 `test_mask_muscv2.sh` 微調參數，新的設定會自動覆蓋舊的 `.env` 檔：
